@@ -1,0 +1,75 @@
+[Unit]
+Description=Binance Futures Scanner Bot
+After=network.target
+Documentation=https://github.com/your-repo/binance-bot
+
+[Service]
+Type=simple
+
+# IMPORTANT: Thay YOUR_USERNAME bằng username thực của bạn
+User=YOUR_USERNAME
+Group=YOUR_USERNAME
+
+# IMPORTANT: Thay đường dẫn này bằng đường dẫn thực tế
+WorkingDirectory=/home/YOUR_USERNAME/Binance-2
+
+# Python path từ virtual environment
+Environment="PATH=/home/YOUR_USERNAME/Binance-2/venv/bin:/usr/local/bin:/usr/bin:/bin"
+
+# Command để chạy bot
+ExecStart=/home/YOUR_USERNAME/Binance-2/venv/bin/python /home/YOUR_USERNAME/Binance-2/main.py
+
+# Tự động restart nếu bot crash
+Restart=always
+RestartSec=10
+
+# Logs
+StandardOutput=append:/home/YOUR_USERNAME/Binance-2/bot.log
+StandardError=append:/home/YOUR_USERNAME/Binance-2/bot.log
+
+# Security settings (optional but recommended)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/YOUR_USERNAME/Binance-2
+
+[Install]
+WantedBy=multi-user.target
+
+# ========================================
+# HƯỚNG DẪN SỬ DỤNG:
+# ========================================
+# 
+# 1. Sửa file này:
+#    - Thay TẤT CẢ "YOUR_USERNAME" bằng username của bạn
+#    - Ví dụ: user -> ubuntu, ec2-user, root, etc.
+#    
+# 2. Copy vào systemd:
+#    sudo cp binance-bot.service.example /etc/systemd/system/binance-bot.service
+#    
+# 3. Reload systemd:
+#    sudo systemctl daemon-reload
+#    
+# 4. Enable service (auto-start on boot):
+#    sudo systemctl enable binance-bot
+#    
+# 5. Start service:
+#    sudo systemctl start binance-bot
+#    
+# 6. Check status:
+#    sudo systemctl status binance-bot
+#    
+# 7. View logs:
+#    sudo journalctl -u binance-bot -f
+#    
+# ========================================
+# COMMANDS:
+# ========================================
+# Start:    sudo systemctl start binance-bot
+# Stop:     sudo systemctl stop binance-bot
+# Restart:  sudo systemctl restart binance-bot
+# Status:   sudo systemctl status binance-bot
+# Enable:   sudo systemctl enable binance-bot
+# Disable:  sudo systemctl disable binance-bot
+# Logs:     sudo journalctl -u binance-bot -f

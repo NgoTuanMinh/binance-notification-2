@@ -1,0 +1,75 @@
+🔧 QUICK FIX CHO LỖI INSTALLATION
+
+===========================================
+LỖI: SSL Certificate Error (macOS)
+===========================================
+
+CÁCH 1: Chạy script tự động (DỄ NHẤT)
+--------------------------------------
+./install_mac.sh
+
+
+CÁCH 2: Fix thủ công
+--------------------------------------
+# Bước 1: Fix SSL certificates
+ls /Applications/Python*
+# Chạy lệnh tương ứng với version Python của bạn:
+/Applications/Python\ 3.11/Install\ Certificates.command
+# hoặc
+/Applications/Python\ 3.12/Install\ Certificates.command
+
+# Bước 2: Cài đặt packages
+pip3 install --trusted-host pypi.org --trusted-host files.pythonhosted.org -r requirements.txt
+
+
+CÁCH 3: Sử dụng Virtual Environment (KHUYẾN NGHỊ)
+--------------------------------------
+# Tạo venv
+python3 -m venv venv
+
+# Activate
+source venv/bin/activate
+
+# Upgrade pip
+pip install --upgrade pip
+
+# Cài packages
+pip install -r requirements.txt
+
+
+CÁCH 4: Cài từng package riêng
+--------------------------------------
+pip3 install ccxt
+pip3 install pandas
+pip3 install pandas-ta
+pip3 install python-dotenv
+pip3 install aiohttp
+pip3 install numpy
+
+
+===========================================
+TEST SAU KHI CÀI XONG
+===========================================
+python3 test_imports.py
+
+
+===========================================
+VẪN LỖI? ĐỌC FILE NÀY
+===========================================
+INSTALLATION_FIX.md
+
+
+===========================================
+COMMANDS NHANH
+===========================================
+# Fix và install tự động (macOS)
+./install_mac.sh
+
+# Test imports
+python3 test_imports.py
+
+# Test full setup
+python3 test_setup.py
+
+# Chạy bot (test 1 lần)
+python3 main.py --once
