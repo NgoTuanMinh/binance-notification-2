@@ -54,10 +54,12 @@ class MarketDataFetcher:
             print("📊 Đang lấy danh sách cặp Futures...")
             await self.exchange.load_markets()
             
-            # Filter for USDT futures pairs that are active
+            # Filter for USDT futures pairs that are active (exclude None symbols)
             futures_symbols = [
                 symbol for symbol, market in self.exchange.markets.items()
-                if market.get('quote') == 'USDT' 
+                if symbol is not None
+                and isinstance(symbol, str)
+                and market.get('quote') == 'USDT' 
                 and market.get('type') == 'future'
                 and market.get('active', False)
                 and ':USDT' not in symbol  # Exclude date-specific futures
@@ -71,31 +73,44 @@ class MarketDataFetcher:
                 # Fetch tickers to get volume data
                 try:
                     tickers = await self.exchange.fetch_tickers(futures_symbols)
-                    # Sort by 24h volume (descending)
-                    symbols_with_volume = [
-                        (symbol, tickers.get(symbol, {}).get('quoteVolume', 0))
-                        for symbol in futures_symbols
-                        if symbol in tickers
-                    ]
-                    symbols_with_volume.sort(key=lambda x: x[1], reverse=True)
-                    sorted_symbols = [symbol for symbol, _ in symbols_with_volume]
+                    if not tickers:
+                        raise ValueError("Empty tickers response")
+                    # Sort by 24h volume (descending), handle None safely
+                    symbols_with_volume = []
+                    for symbol in futures_symbols:
+                        if symbol is None:
+                            continue
+                        ticker = tickers.get(symbol)
+                        if ticker is None:
+                            ticker = {}
+                        vol = ticker.get('quoteVolume') if isinstance(ticker, dict) else None
+                        try:
+                            vol = float(vol) if vol is not None else 0.0
+                        except (TypeError, ValueError):
+                            vol = 0.0
+                        symbols_with_volume.append((symbol, vol))
+                    
+                    symbols_with_volume.sort(key=lambda x: (x[1] or 0), reverse=True)
+                    sorted_symbols = [s for s, _ in symbols_with_volume if s is not None]
                     
                     if sorted_symbols:
-                        top_5 = sorted_symbols[:5]
-                        print(f"   Top 5 by volume: {', '.join(top_5)}")
+                        top_5 = [s for s in sorted_symbols[:5] if s]
+                        if top_5:
+                            print(f"   Top 5 by volume: {', '.join(str(s) for s in top_5)}")
                 except Exception as e:
                     print(f"⚠️  Không thể sort by volume: {e}, dùng alphabetical")
-                    sorted_symbols = sorted(futures_symbols)
+                    sorted_symbols = sorted([s for s in futures_symbols if s is not None and isinstance(s, str)])
             else:
                 # Sort alphabetically
-                sorted_symbols = sorted(futures_symbols)
+                sorted_symbols = sorted([s for s in futures_symbols if s is not None and isinstance(s, str)])
             
             # Apply limit if specified
-            if limit is not None and limit > 0:
+            if limit is not None and limit > 0 and sorted_symbols:
                 sorted_symbols = sorted_symbols[:limit]
-                print(f"🔍 Giới hạn: {len(sorted_symbols)}/{len(futures_symbols)} cặp")
+                total = len(futures_symbols)
+                print(f"🔍 Giới hạn: {len(sorted_symbols)}/{total} cặp")
             
-            return sorted_symbols
+            return sorted_symbols if sorted_symbols is not None else []
             
         except Exception as e:
             print(f"❌ Lỗi khi lấy danh sách symbols: {e}")
