@@ -20,11 +20,21 @@ class MarketDataFetcher:
         """
         Initialize Binance exchange connection.
         NOTE: No API key/secret required - using public endpoints only.
+        Uses BINANCE_FUTURE_API_BASE_URL from config (default: https://fapi.binance.com/)
         """
+        # Normalize API URL (no trailing slash) for ccxt
+        base_url = (config.BINANCE_FUTURE_API_BASE_URL or 'https://fapi.binance.com/').rstrip('/')
+        
         self.exchange = ccxt.binance({
             'enableRateLimit': True,
             'options': {
-                'defaultType': 'future',  # Use Futures market
+                'defaultType': 'future',  # Use Futures market (USDT-M)
+            },
+            # Override API base URL (e.g. for different region or proxy)
+            'urls': {
+                'api': {
+                    'fapi': base_url,  # Futures API base
+                }
             }
         })
         # Semaphore to limit concurrent requests

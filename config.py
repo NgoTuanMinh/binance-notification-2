@@ -11,7 +11,8 @@ load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
-# Binance Configuration
+# Binance Configuration (used in market_data.py when initializing ccxt)
+# Override if you need different region (e.g. binance.com vs binance.us) or proxy
 BINANCE_FUTURE_API_BASE_URL = os.getenv('BINANCE_FUTURE_API_BASE_URL', 'https://fapi.binance.com/')
 
 # Rate Limiting Settings
