@@ -188,6 +188,110 @@ sudo systemctl restart binance-bot
 
 ---
 
+## 📦 Quản lý service Python (kiểu PM2)
+
+Trên Ubuntu không có PM2 mặc định, nhưng có thể dùng các cách sau để quản lý bot giống PM2 (start/stop/restart, auto-restart, xem log).
+
+| Cách | Giống PM2 | Ghi chú |
+|------|-----------|--------|
+| **systemd** | ✅ | Có sẵn trên Ubuntu, dùng lệnh `systemctl` (đã hướng dẫn ở Option 3 trên). |
+| **Supervisor** | ✅✅ | CLI gần giống PM2: `supervisorctl start/stop/restart`, xem log, nhiều process. |
+| **PM2** | ✅✅✅ | Cài Node.js + PM2, chạy được cả Python: `pm2 start main.py --interpreter python3`. |
+
+### Dùng systemd (đã setup ở Option 3)
+
+Lệnh tương ứng PM2:
+
+```bash
+# PM2          →  systemd
+# pm2 start    →  sudo systemctl start binance-bot
+# pm2 stop     →  sudo systemctl stop binance-bot
+# pm2 restart  →  sudo systemctl restart binance-bot
+# pm2 status   →  sudo systemctl status binance-bot
+# pm2 logs     →  sudo journalctl -u binance-bot -f
+# pm2 save     →  sudo systemctl enable binance-bot   (auto-start khi reboot)
+```
+
+### Dùng Supervisor (giống PM2, nhiều app)
+
+**Cài đặt:**
+```bash
+sudo apt-get update
+sudo apt-get install -y supervisor
+```
+
+**Tạo config:**
+```bash
+sudo nano /etc/supervisor/conf.d/binance-bot.conf
+```
+
+**Nội dung (sửa path và user):**
+```ini
+[program:binance-bot]
+command=/home/YOUR_USERNAME/Binance-2/venv/bin/python /home/YOUR_USERNAME/Binance-2/main.py
+directory=/home/YOUR_USERNAME/Binance-2
+user=YOUR_USERNAME
+autostart=true
+autorestart=true
+redirect_stderr=true
+stdout_logfile=/home/YOUR_USERNAME/Binance-2/bot.log
+environment=PATH="/home/YOUR_USERNAME/Binance-2/venv/bin"
+```
+
+**Quản lý (giống pm2):**
+```bash
+# Reload config sau khi sửa file
+sudo supervisorctl reread
+sudo supervisorctl update
+
+# Start / Stop / Restart
+sudo supervisorctl start binance-bot
+sudo supervisorctl stop binance-bot
+sudo supervisorctl restart binance-bot
+
+# Trạng thái tất cả app
+sudo supervisorctl status
+
+# Xem log realtime
+sudo supervisorctl tail -f binance-bot stdout
+```
+
+### Dùng PM2 cho Python (nếu đã quen PM2)
+
+**Cài Node.js + PM2:**
+```bash
+# Cài Node.js (nvm hoặc package)
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs
+
+# Cài PM2 global
+sudo npm install -g pm2
+```
+
+**Chạy bot Python bằng PM2:**
+```bash
+cd /path/to/Binance-2
+
+# Chạy bằng python trong venv
+pm2 start main.py --name binance-bot --interpreter ./venv/bin/python
+
+# Hoặc dùng script shell (tạo start.sh rồi: pm2 start start.sh --name binance-bot)
+# Nội dung start.sh (sửa path):
+#   #!/bin/bash
+#   cd /path/to/Binance-2 && source venv/bin/activate && exec python main.py
+```
+
+**Lệnh quen thuộc:**
+```bash
+pm2 list
+pm2 logs binance-bot
+pm2 restart binance-bot
+pm2 stop binance-bot
+pm2 save && pm2 startup   # auto-start khi reboot
+```
+
+---
+
 ## 🔒 Security Best Practices
 
 ### 1. Firewall
