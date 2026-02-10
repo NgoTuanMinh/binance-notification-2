@@ -20,7 +20,7 @@ class MarketDataFetcher:
         base_url = (config.BINANCE_FUTURE_API_BASE_URL or 'https://fapi.binance.com/').rstrip('/')
 
         # Dùng binanceusdm → CHỈ gọi fapi.binance.com (USDT-M), không bao giờ gọi dapi.binance.com (COIN-M)
-        self.exchange = ccxt.binanceusdm({
+        self.exchange = ccxt.binance({
             'apiKey': config.BINANCE_API_KEY or '',
             'secret': config.BINANCE_SECRET_KEY or '',
             'enableRateLimit': True,
