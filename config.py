@@ -51,8 +51,8 @@ SCAN_INTERVAL_M15 = 120      # 2 minutes for M15 signals (1-3 minutes range)
 
 # Technical Indicators Parameters
 EMA_TREND = 200      # EMA for trend filter on H4
-EMA_VALUE_FAST = 20  # Fast EMA for value zone on H1
-EMA_VALUE_SLOW = 50  # Slow EMA for value zone on H1
+EMA_VALUE_FAST = 34  # Fast EMA for value zone on H1
+EMA_VALUE_SLOW = 89  # Slow EMA for value zone on H1
 RSI_PERIOD = 14      # RSI period for divergence detection
 
 # Higher High/Higher Low Parameters
