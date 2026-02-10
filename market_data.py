@@ -16,16 +16,14 @@ class MarketDataFetcher:
     """
 
     def __init__(self):
-        """Initialize Binance exchange connection with API Key and Secret."""
+        """Initialize Binance USDT-M Futures (chỉ dùng fapi.binance.com, không dùng dapi)."""
         base_url = (config.BINANCE_FUTURE_API_BASE_URL or 'https://fapi.binance.com/').rstrip('/')
 
-        self.exchange = ccxt.binance({
+        # Dùng binanceusdm → CHỈ gọi fapi.binance.com (USDT-M), không bao giờ gọi dapi.binance.com (COIN-M)
+        self.exchange = ccxt.binanceusdm({
             'apiKey': config.BINANCE_API_KEY or '',
             'secret': config.BINANCE_SECRET_KEY or '',
             'enableRateLimit': True,
-            'options': {
-                'defaultType': 'future',
-            },
             'urls': {
                 'api': {
                     'fapi': base_url,
@@ -47,14 +45,24 @@ class MarketDataFetcher:
             print("📊 Đang lấy danh sách cặp Futures...")
             await self.exchange.load_markets()
 
-            futures_symbols = [
-                symbol for symbol, market in self.exchange.markets.items()
-                if symbol is not None and isinstance(symbol, str)
-                and market.get('quote') == 'USDT'
-                and market.get('type') == 'future'
-                and market.get('active', False)
-                and ':USDT' not in symbol
-            ]
+            # Lọc USDT-margined futures (ccxt mới dùng future=True, type có thể vẫn 'spot')
+            # Symbol perpetual: 'BTC/USDT' hoặc 'BTC/USDT:USDT'; loại bỏ futures theo kỳ hạn (có _)
+            futures_symbols = []
+            for symbol, market in self.exchange.markets.items():
+                if symbol is None or not isinstance(symbol, str):
+                    continue
+                if market.get('quote') != 'USDT':
+                    continue
+                if market.get('active', True) is False:
+                    continue
+                # Bỏ qua futures theo kỳ hạn (symbol dạng BASE/USDT_250328); giữ perpetual (BTC/USDT, BTC/USDT:USDT)
+                market_id = (market.get('id') or symbol) or ''
+                if '_' in market_id and any(c.isdigit() for c in market_id):
+                    continue
+                if limit is not None and len(futures_symbols) > limit:
+                    break
+                futures_symbols.append(symbol)
+
             print(f"✅ Tìm thấy {len(futures_symbols)} cặp Futures USDT")
 
             if sort_by == 'volume':

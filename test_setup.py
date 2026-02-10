@@ -62,10 +62,11 @@ async def test_binance_connection():
     
     try:
         from market_data import MarketDataFetcher
+        import config
         
         async with MarketDataFetcher() as fetcher:
             # Try to get symbols
-            symbols = await fetcher.get_futures_symbols()
+            symbols = await fetcher.get_futures_symbols("volume", config.MAX_SYMBOLS_TO_SCAN)
             
             if symbols:
                 print(f"  ✅ Kết nối Binance thành công")
@@ -98,7 +99,7 @@ async def test_data_fetching():
                 symbol,
                 config.TIMEFRAMES
             )
-            
+
             success = True
             for name, df in data.items():
                 if df is not None and not df.empty:
