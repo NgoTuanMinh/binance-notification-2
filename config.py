@@ -56,19 +56,31 @@ EMA_VALUE_SLOW = 89  # Slow EMA for value zone on H1
 RSI_PERIOD = 14      # RSI period for divergence detection
 
 # Higher High/Higher Low Parameters
-HH_HL_LOOKBACK = 20  # Number of candles to look back for swing points
+HH_HL_LOOKBACK = 34  # Number of candles to look back for swing points
 
 # Fibonacci Retracement Levels
 FIB_LEVEL_MIN = 0.5   # Minimum Fibonacci level
 FIB_LEVEL_MAX = 0.618 # Maximum Fibonacci level
 
+# H1 Strong Support/Resistance Zone Filter
+H1_SR_LOOKBACK_CANDLES = int(os.getenv('H1_SR_LOOKBACK_CANDLES', '180'))  # ~7.5 days of H1 candles
+H1_SR_SWING_LOOKBACK = int(os.getenv('H1_SR_SWING_LOOKBACK', '3'))        # swing detection sensitivity
+H1_SR_MIN_TOUCHES = int(os.getenv('H1_SR_MIN_TOUCHES', '5'))              # minimum touches to call a zone "strong"
+H1_SR_ZONE_MIN_PERCENT = float(os.getenv('H1_SR_ZONE_MIN_PERCENT', '1.0'))  # zone half-width min (%)
+H1_SR_ZONE_MAX_PERCENT = float(os.getenv('H1_SR_ZONE_MAX_PERCENT', '1.5'))  # zone half-width max (%)
+
 # Volume Parameters
-VOLUME_MA_PERIOD = 20  # Period for volume moving average
+VOLUME_MA_PERIOD = 34  # Period for volume moving average
 VOLUME_MULTIPLIER = 1.0  # Current volume must be >= this * average
 
 # Candle Pattern Parameters
 PINBAR_WICK_RATIO = 0.6  # Wick must be at least 60% of candle range
 ENGULFING_BODY_RATIO = 1.0  # Body must fully engulf previous candle
+
+# Stop Loss (khoảng cách từ entry, theo % giá)
+# Nếu SL từ nến quá ngắn → nới ra tối thiểu STOP_LOSS_MIN_PERCENT; quá xa → thu lại tối đa STOP_LOSS_MAX_PERCENT
+STOP_LOSS_MIN_PERCENT = float(os.getenv('STOP_LOSS_MIN_PERCENT', '0.3'))   # tối thiểu 0.3%
+STOP_LOSS_MAX_PERCENT = float(os.getenv('STOP_LOSS_MAX_PERCENT', '3.0'))   # tối đa 3%
 
 # Candle lookback periods
 CANDLE_LIMIT = 500   # Number of candles to fetch per request

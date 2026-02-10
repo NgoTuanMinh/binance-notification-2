@@ -227,6 +227,140 @@ class StrategyEngine:
             'fib_0.618': swing_high - (diff * 0.618),
             'fib_0.786': swing_high - (diff * 0.786),
         }
+
+    def _calculate_h1_sr_zone_percent(self, df_h1: pd.DataFrame) -> float:
+        """
+        Calculate dynamic H1 S/R zone half-width (%), clamped in configured range.
+        Uses recent median candle range as a volatility proxy.
+        """
+        min_pct = config.H1_SR_ZONE_MIN_PERCENT
+        max_pct = config.H1_SR_ZONE_MAX_PERCENT
+
+        if df_h1 is None or len(df_h1) < 20:
+            return (min_pct + max_pct) / 2.0
+
+        recent = df_h1.tail(20)
+        close = recent['close'].replace(0, np.nan)
+        range_pct_series = ((recent['high'] - recent['low']) / close) * 100
+        range_pct = float(range_pct_series.median()) if not range_pct_series.dropna().empty else (min_pct + max_pct) / 2.0
+
+        return float(np.clip(range_pct, min_pct, max_pct))
+
+    def _cluster_levels_to_strong_zones(
+        self,
+        levels: List[float],
+        zone_percent: float
+    ) -> List[Dict]:
+        """Cluster nearby swing levels; keep clusters with enough touches as strong zones."""
+        clean_levels = sorted([float(x) for x in levels if pd.notna(x) and x > 0])
+        if not clean_levels:
+            return []
+
+        clusters: List[List[float]] = [[clean_levels[0]]]
+        for level in clean_levels[1:]:
+            current_center = float(np.mean(clusters[-1]))
+            diff_pct = abs(level - current_center) / current_center * 100
+            if diff_pct <= zone_percent:
+                clusters[-1].append(level)
+            else:
+                clusters.append([level])
+
+        zones = []
+        for cluster in clusters:
+            touches = len(cluster)
+            if touches < config.H1_SR_MIN_TOUCHES:
+                continue
+
+            level = float(np.mean(cluster))
+            half_width = level * (zone_percent / 100.0)
+            zones.append({
+                'level': level,
+                'touches': touches,
+                'zone_percent': zone_percent,
+                'zone_low': level - half_width,
+                'zone_high': level + half_width,
+            })
+
+        return zones
+
+    def find_strong_h1_zones(self, df_h1: pd.DataFrame) -> Dict[str, List[Dict]]:
+        """
+        Build strong support/resistance zones on H1 from clustered swing highs/lows.
+        """
+        if df_h1 is None or len(df_h1) < max(50, config.H1_SR_LOOKBACK_CANDLES):
+            return {'supports': [], 'resistances': []}
+
+        recent_df = df_h1.tail(config.H1_SR_LOOKBACK_CANDLES).reset_index(drop=True)
+        swing_highs, swing_lows = self.find_swing_points(
+            recent_df,
+            lookback=config.H1_SR_SWING_LOOKBACK
+        )
+
+        support_levels = [recent_df['low'].iloc[i] for i in swing_lows]
+        resistance_levels = [recent_df['high'].iloc[i] for i in swing_highs]
+        zone_percent = self._calculate_h1_sr_zone_percent(recent_df)
+
+        supports = self._cluster_levels_to_strong_zones(support_levels, zone_percent)
+        resistances = self._cluster_levels_to_strong_zones(resistance_levels, zone_percent)
+
+        # Sort for easier nearest-zone matching
+        supports = sorted(supports, key=lambda z: z['level'])
+        resistances = sorted(resistances, key=lambda z: z['level'])
+
+        return {'supports': supports, 'resistances': resistances}
+
+    def is_touching_strong_h1_zone(
+        self,
+        df_h1: pd.DataFrame,
+        trend: TrendDirection
+    ) -> Tuple[bool, str]:
+        """
+        Confirm current H1 candle is touching a strong zone:
+        - Bullish: strong support zone
+        - Bearish: strong resistance zone
+        """
+        zones = self.find_strong_h1_zones(df_h1)
+        if not zones['supports'] and not zones['resistances']:
+            return False, ""
+
+        last = df_h1.iloc[-1]
+        close = float(last['close'])
+        high = float(last['high'])
+        low = float(last['low'])
+
+        if trend == TrendDirection.BULLISH:
+            candidates = zones['supports']
+            zone_label = "support"
+        elif trend == TrendDirection.BEARISH:
+            candidates = zones['resistances']
+            zone_label = "resistance"
+        else:
+            return False, ""
+
+        touched = []
+        for zone in candidates:
+            zone_low = zone['zone_low']
+            zone_high = zone['zone_high']
+            wick_touches = low <= zone_high and high >= zone_low
+            close_in_zone = zone_low <= close <= zone_high
+            if wick_touches or close_in_zone:
+                distance_pct = abs(close - zone['level']) / zone['level'] * 100
+                touched.append((distance_pct, zone))
+
+        if not touched:
+            return False, ""
+
+        # Best zone = nearest to current close; tie-breaker: more touches
+        touched.sort(key=lambda item: (item[0], -item[1]['touches']))
+        distance_pct, best = touched[0]
+        return (
+            True,
+            (
+                f"H1 strong {zone_label} zone "
+                f"{best['zone_low']:.4f}-{best['zone_high']:.4f} "
+                f"({best['touches']} touches, {distance_pct:.2f}% from center)"
+            )
+        )
     
     def is_in_value_zone(
         self, 
@@ -275,33 +409,51 @@ class StrategyEngine:
         
         tolerance = 0.01  # 1% tolerance
         
+        base_match = False
+        base_desc = ""
+        fib_level: Optional[float] = None
+
         if trend == TrendDirection.BULLISH:
             # Check Fibonacci zone (price should be between 0.5 and 0.618)
             if fib_618 <= close <= fib_50:
                 fib_level = (close - fib_618) / (fib_50 - fib_618) * 0.118 + 0.5
-                return True, f"Fibonacci {fib_level:.3f} zone", fib_level
+                base_match = True
+                base_desc = f"Fibonacci {fib_level:.3f} zone"
             
             # Check EMA pullback
-            if abs(close - ema34) / ema34 < tolerance or (low <= ema34 * 1.01 and close > ema34):
-                return True, "EMA34 pullback", None
+            if (not base_match) and (abs(close - ema34) / ema34 < tolerance or (low <= ema34 * 1.01 and close > ema34)):
+                base_match = True
+                base_desc = "EMA34 pullback"
             
-            if abs(close - ema89) / ema89 < tolerance or (low <= ema89 * 1.01 and close > ema89):
-                return True, "EMA89 pullback", None
+            if (not base_match) and (abs(close - ema89) / ema89 < tolerance or (low <= ema89 * 1.01 and close > ema89)):
+                base_match = True
+                base_desc = "EMA89 pullback"
         
         elif trend == TrendDirection.BEARISH:
             # Check Fibonacci zone (price should be between 0.5 and 0.618)
             if fib_50 <= close <= fib_618:
                 fib_level = (close - fib_50) / (fib_618 - fib_50) * 0.118 + 0.5
-                return True, f"Fibonacci {fib_level:.3f} zone", fib_level
+                base_match = True
+                base_desc = f"Fibonacci {fib_level:.3f} zone"
             
             # Check EMA rejection
-            if abs(close - ema34) / ema34 < tolerance or (high >= ema34 * 0.99 and close < ema34):
-                return True, "EMA34 rejection", None
+            if (not base_match) and (abs(close - ema34) / ema34 < tolerance or (high >= ema34 * 0.99 and close < ema34)):
+                base_match = True
+                base_desc = "EMA34 rejection"
             
-            if abs(close - ema89) / ema89 < tolerance or (high >= ema89 * 0.99 and close < ema89):
-                return True, "EMA89 rejection", None
-        
-        return False, "", None
+            if (not base_match) and (abs(close - ema89) / ema89 < tolerance or (high >= ema89 * 0.99 and close < ema89)):
+                base_match = True
+                base_desc = "EMA89 rejection"
+
+        if not base_match:
+            return False, "", None
+
+        # Additional required filter: H1 must also touch strong S/R zone (1.0-1.5%).
+        sr_match, sr_desc = self.is_touching_strong_h1_zone(df_h1, trend)
+        if not sr_match:
+            return False, "", None
+
+        return True, f"{base_desc} + {sr_desc}", fib_level
     
     def detect_pinbar(self, df: pd.DataFrame, trend: TrendDirection) -> Optional[Dict]:
         """
@@ -571,14 +723,32 @@ class StrategyEngine:
         if not entry_signal:
             return None
         
-        # All conditions met - create signal
-        risk = entry_signal['risk']
+        # Áp dụng stop loss min/max (config) — SL từ nến có thể quá ngắn
+        entry = entry_signal['entry']
+        sl_raw = entry_signal['stop_loss']
+        min_pct = config.STOP_LOSS_MIN_PERCENT / 100.0
+        max_pct = config.STOP_LOSS_MAX_PERCENT / 100.0
+        
+        if trend == TrendDirection.BULLISH:
+            risk_distance = entry - sl_raw
+            min_dist = entry * min_pct
+            max_dist = entry * max_pct
+            risk_distance = max(min_dist, min(max_dist, risk_distance))
+            stop_loss = entry - risk_distance
+        else:
+            risk_distance = sl_raw - entry
+            min_dist = entry * min_pct
+            max_dist = entry * max_pct
+            risk_distance = max(min_dist, min(max_dist, risk_distance))
+            stop_loss = entry + risk_distance
+        
+        risk = risk_distance
         reward_ratio = 2.0  # 1:2 risk-reward ratio
         
         if trend == TrendDirection.BULLISH:
-            take_profit = entry_signal['entry'] + (risk * reward_ratio)
+            take_profit = entry + (risk * reward_ratio)
         else:
-            take_profit = entry_signal['entry'] - (risk * reward_ratio)
+            take_profit = entry - (risk * reward_ratio)
         
         # Build reason string
         reason_parts = [
@@ -595,8 +765,8 @@ class StrategyEngine:
         signal = Signal(
             symbol=symbol,
             direction=trend,
-            entry_price=entry_signal['entry'],
-            stop_loss=entry_signal['stop_loss'],
+            entry_price=entry,
+            stop_loss=stop_loss,
             take_profit=take_profit,
             timeframe='M15',
             pattern=entry_signal['pattern'],
