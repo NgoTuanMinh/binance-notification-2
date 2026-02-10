@@ -139,7 +139,7 @@ async def test_strategy_engine():
         # Test indicator calculation
         df = engine.calculate_indicators(sample_data)
         
-        required_indicators = ['ema20', 'ema50', 'ema200', 'rsi']
+        required_indicators = ['ema34', 'ema89', 'ema200', 'rsi']
         missing = [ind for ind in required_indicators if ind not in df.columns]
         
         if not missing:

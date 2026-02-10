@@ -30,8 +30,8 @@ class Signal:
     pattern: str
     reason: str
     h4_ema200: float
-    h1_ema20: float
-    h1_ema50: float
+    h1_ema34: float
+    h1_ema89: float
     current_price: float
     rsi: float
     volume_ratio: float
@@ -42,7 +42,7 @@ class StrategyEngine:
     """
     Implements the enhanced 3-step filtering strategy:
     1. H4: Price above/below EMA 200 + Higher High/Higher Low structure
-    2. H1: Pullback to Fibonacci 0.5-0.618 or EMA 20/50
+    2. H1: Pullback to Fibonacci 0.5-0.618 or EMA 34/89
     3. M15: Candlestick patterns + RSI Divergence + Volume confirmation
     """
     
@@ -68,9 +68,9 @@ class StrategyEngine:
         # Create a copy to avoid modifying original
         df = df.copy()
         
-        # Calculate EMAs
-        df['ema20'] = ta.ema(df['close'], length=20)
-        df['ema50'] = ta.ema(df['close'], length=50)
+        # Calculate EMAs (H1 dùng 34/89, H4 dùng 200)
+        df['ema34'] = ta.ema(df['close'], length=34)
+        df['ema89'] = ta.ema(df['close'], length=89)
         df['ema200'] = ta.ema(df['close'], length=200)
         
         # Calculate RSI
@@ -237,7 +237,7 @@ class StrategyEngine:
         """
         Step 2: Check if H1 price is in value zone.
         - Pullback to Fibonacci 0.5-0.618 from H4 swing
-        - OR touching EMA 20/50 on H1
+        - OR touching EMA 34/89 on H1
         
         Args:
             df_h1: H1 timeframe DataFrame with indicators
@@ -250,18 +250,18 @@ class StrategyEngine:
         if df_h1 is None or df_h1.empty:
             return False, "", None
         
-        if 'ema20' not in df_h1.columns or 'ema50' not in df_h1.columns:
+        if 'ema34' not in df_h1.columns or 'ema89' not in df_h1.columns:
             return False, "", None
         
         last_candle = df_h1.iloc[-1]
         close = last_candle['close']
         high = last_candle['high']
         low = last_candle['low']
-        ema20 = last_candle['ema20']
-        ema50 = last_candle['ema50']
+        ema34 = last_candle['ema34']
+        ema89 = last_candle['ema89']
         
         # Skip if EMAs not ready
-        if pd.isna(ema20) or pd.isna(ema50):
+        if pd.isna(ema34) or pd.isna(ema89):
             return False, "", None
         
         # Calculate Fibonacci levels from H4
@@ -282,11 +282,11 @@ class StrategyEngine:
                 return True, f"Fibonacci {fib_level:.3f} zone", fib_level
             
             # Check EMA pullback
-            if abs(close - ema20) / ema20 < tolerance or (low <= ema20 * 1.01 and close > ema20):
-                return True, "EMA20 pullback", None
+            if abs(close - ema34) / ema34 < tolerance or (low <= ema34 * 1.01 and close > ema34):
+                return True, "EMA34 pullback", None
             
-            if abs(close - ema50) / ema50 < tolerance or (low <= ema50 * 1.01 and close > ema50):
-                return True, "EMA50 pullback", None
+            if abs(close - ema89) / ema89 < tolerance or (low <= ema89 * 1.01 and close > ema89):
+                return True, "EMA89 pullback", None
         
         elif trend == TrendDirection.BEARISH:
             # Check Fibonacci zone (price should be between 0.5 and 0.618)
@@ -295,11 +295,11 @@ class StrategyEngine:
                 return True, f"Fibonacci {fib_level:.3f} zone", fib_level
             
             # Check EMA rejection
-            if abs(close - ema20) / ema20 < tolerance or (high >= ema20 * 0.99 and close < ema20):
-                return True, "EMA20 rejection", None
+            if abs(close - ema34) / ema34 < tolerance or (high >= ema34 * 0.99 and close < ema34):
+                return True, "EMA34 rejection", None
             
-            if abs(close - ema50) / ema50 < tolerance or (high >= ema50 * 0.99 and close < ema50):
-                return True, "EMA50 rejection", None
+            if abs(close - ema89) / ema89 < tolerance or (high >= ema89 * 0.99 and close < ema89):
+                return True, "EMA89 rejection", None
         
         return False, "", None
     
@@ -602,8 +602,8 @@ class StrategyEngine:
             pattern=entry_signal['pattern'],
             reason=", ".join(reason_parts),
             h4_ema200=df_h4['ema200'].iloc[-1],
-            h1_ema20=df_h1['ema20'].iloc[-1],
-            h1_ema50=df_h1['ema50'].iloc[-1],
+            h1_ema34=df_h1['ema34'].iloc[-1],
+            h1_ema89=df_h1['ema89'].iloc[-1],
             current_price=df_m15['close'].iloc[-1],
             rsi=df_m15['rsi'].iloc[-1],
             volume_ratio=entry_signal['volume_ratio'],

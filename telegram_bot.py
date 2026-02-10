@@ -76,8 +76,8 @@ class TelegramBot:
         # Build indicators section
         indicators_text = f"""📊 *Chỉ báo:*
 • H4 EMA200: `{signal.h4_ema200:.4f}`
-• H1 EMA20: `{signal.h1_ema20:.4f}`
-• H1 EMA50: `{signal.h1_ema50:.4f}`
+• H1 EMA34: `{signal.h1_ema34:.4f}`
+• H1 EMA89: `{signal.h1_ema89:.4f}`
 • RSI(14): `{signal.rsi:.2f}`
 • Volume: `{signal.volume_ratio:.2f}x` trung bình"""
         
@@ -105,7 +105,6 @@ class TelegramBot:
 
 {indicators_text}
 
-⚠️ *Lưu ý:* Đây chỉ là tín hiệu tham khảo. Hãy quản lý rủi ro cẩn thận!
         """.strip()
         
         return message
@@ -236,8 +235,8 @@ async def test_telegram():
         pattern="Bullish Engulfing",
         reason="H4 trend BULLISH with HH/HL structure, H1 Fibonacci 0.618 zone, M15 Bullish Engulfing, Volume 1.5x",
         h4_ema200=43000.0,
-        h1_ema20=44800.0,
-        h1_ema50=44600.0,
+        h1_ema34=44800.0,
+        h1_ema89=44600.0,
         current_price=45000.0,
         rsi=45.5,
         volume_ratio=1.5,
