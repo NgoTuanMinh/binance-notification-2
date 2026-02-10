@@ -4,7 +4,7 @@ Bot quét thị trường Binance Futures tự động để tìm cơ hội giao
 
 ## 🔒 Bảo mật & Quyền riêng tư
 
-**QUAN TRỌNG**: Bot này **KHÔNG** yêu cầu API Key/Secret của Binance. Chỉ sử dụng Public API endpoints để lấy dữ liệu thị trường công khai (OHLCV). An toàn tuyệt đối cho tài khoản của bạn.
+Bot sử dụng **BINANCE_API_KEY** và **BINANCE_SECRET_KEY** với ccxt để lấy dữ liệu (load_markets, OHLCV, tickers). **Khuyến nghị:** Tạo API Key trên Binance với quyền **chỉ đọc (Read)**; không bật quyền giao dịch (Trade) hay rút tiền (Withdraw) để giảm rủi ro.
 
 ## 📊 Chiến lược giao dịch
 
@@ -59,9 +59,16 @@ cp .env.example .env
 4. Mở file `.env` và điền thông tin:
 
 ```env
+# Telegram (bắt buộc)
 TELEGRAM_BOT_TOKEN=1234567890:ABCdefGHIjklMNOpqrsTUVwxyz
 TELEGRAM_CHAT_ID=123456789
+
+# Binance (bắt buộc cho ccxt)
+BINANCE_API_KEY=your_binance_api_key
+BINANCE_SECRET_KEY=your_binance_secret_key
 ```
+
+**Lưu ý:** Bot dùng ccxt với API Key/Secret Binance để lấy dữ liệu (load_markets, OHLCV, tickers). Chỉ cần quyền đọc (Read) là đủ; không cần quyền giao dịch.
 
 ## 📖 Sử dụng
 

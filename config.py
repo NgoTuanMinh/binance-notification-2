@@ -12,7 +12,10 @@ TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
 # Binance Configuration (used in market_data.py when initializing ccxt)
-# Override if you need different region (e.g. binance.com vs binance.us) or proxy
+# API Key và Secret dùng cho ccxt (load_markets, fetch_ohlcv, fetch_tickers, ...)
+BINANCE_API_KEY = os.getenv('BINANCE_API_KEY', '')
+BINANCE_SECRET_KEY = os.getenv('BINANCE_SECRET_KEY', '') or os.getenv('BINANCE_SECRET', '')
+# Override base URL nếu cần region khác (binance.us) hoặc proxy
 BINANCE_FUTURE_API_BASE_URL = os.getenv('BINANCE_FUTURE_API_BASE_URL', 'https://fapi.binance.com/')
 
 # Rate Limiting Settings
@@ -76,4 +79,8 @@ def validate_config():
         raise ValueError("TELEGRAM_BOT_TOKEN is not set in .env file")
     if not TELEGRAM_CHAT_ID:
         raise ValueError("TELEGRAM_CHAT_ID is not set in .env file")
+    if not (BINANCE_API_KEY and BINANCE_SECRET_KEY):
+        raise ValueError(
+            "BINANCE_API_KEY và BINANCE_SECRET_KEY phải được set trong .env (ccxt cần để gọi API)"
+        )
     return True
