@@ -7,14 +7,59 @@ Implements 3 independent scanning loops:
 """
 import asyncio
 import time
+import gc
 from datetime import datetime
-from typing import List, Dict, Set
+from pathlib import Path
+from typing import List, Dict, Set, Optional
 import pandas as pd
 
 import config
 from market_data import MarketDataFetcher
 from strategy_engine import StrategyEngine, Signal, TrendDirection
 from telegram_bot import TelegramBot
+
+
+class DiskDataCache:
+    """Simple disk-based cache for dataframe persistence between loops."""
+
+    def __init__(self, cache_dir: str = ".runtime_cache"):
+        self.base_dir = Path(cache_dir)
+        self.base_dir.mkdir(parents=True, exist_ok=True)
+
+    @staticmethod
+    def _safe_symbol(symbol: str) -> str:
+        return symbol.replace("/", "_").replace(":", "_")
+
+    def _file_path(self, timeframe: str, symbol: str) -> Path:
+        tf_dir = self.base_dir / timeframe
+        tf_dir.mkdir(parents=True, exist_ok=True)
+        return tf_dir / f"{self._safe_symbol(symbol)}.pkl"
+
+    def save_df(self, timeframe: str, symbol: str, df: pd.DataFrame) -> None:
+        df.to_pickle(self._file_path(timeframe, symbol))
+
+    def load_df(self, timeframe: str, symbol: str) -> Optional[pd.DataFrame]:
+        path = self._file_path(timeframe, symbol)
+        if not path.exists():
+            return None
+        try:
+            return pd.read_pickle(path)
+        except Exception:
+            return None
+
+    def clear_timeframe(self, timeframe: str) -> None:
+        tf_dir = self.base_dir / timeframe
+        if not tf_dir.exists():
+            return
+        for path in tf_dir.glob("*.pkl"):
+            try:
+                path.unlink()
+            except Exception:
+                pass
+
+    def clear_all(self) -> None:
+        self.clear_timeframe("h4")
+        self.clear_timeframe("h1")
 
 
 class MultiTimeframeScanner:
@@ -27,6 +72,7 @@ class MultiTimeframeScanner:
         """Initialize scanner components and state."""
         self.strategy = StrategyEngine()
         self.telegram = TelegramBot()
+        self.disk_cache = DiskDataCache()
         
         # State management for each stage
         self.all_symbols: List[str] = []
@@ -48,6 +94,9 @@ class MultiTimeframeScanner:
     
     async def initialize(self):
         """Initialize by fetching all symbols."""
+        # Clear stale on-disk cache from previous runs
+        self.disk_cache.clear_all()
+
         async with MarketDataFetcher() as fetcher:
             self.all_symbols = await fetcher.get_futures_symbols(
                 sort_by=config.SYMBOL_SORT_METHOD,
@@ -87,13 +136,14 @@ class MultiTimeframeScanner:
                 
                 self.stats['h4_scans'] += 1
                 start_time = time.time()
+                self.disk_cache.clear_timeframe("h4")
                 
                 async with MarketDataFetcher() as fetcher:
                     # Fetch H4 data for all symbols
-                    h4_data = await fetcher.scan_market(self.all_symbols, config.TIMEFRAMES['trend'])
-                    
-                    # Update cache
-                    self.h4_data_cache = h4_data
+                    h4_data = await fetcher.scan_market(
+                        self.all_symbols,
+                        config.TIMEFRAMES['trend']
+                    )
                     
                     # Filter symbols with clear trend and structure
                     new_candidates = {}
@@ -104,10 +154,12 @@ class MultiTimeframeScanner:
                         
                         if trend and trend != TrendDirection.NEUTRAL:
                             new_candidates[symbol] = trend
+                            self.disk_cache.save_df("h4", symbol, df)
                             print(f"  ✅ {symbol}: {trend.value}")
                     
                     # Update candidate list
                     self.candidate_symbols = new_candidates
+                    self.h4_data_cache = {}
                     
                     duration = time.time() - start_time
                     
@@ -118,6 +170,7 @@ class MultiTimeframeScanner:
                 
                 # Wait 1 hour before next H4 scan
                 print(f"⏸  H4: Chờ {config.SCAN_INTERVAL_H4/60:.0f} phút...")
+                gc.collect()
                 await asyncio.sleep(config.SCAN_INTERVAL_H4)
                 
             except Exception as e:
@@ -146,26 +199,30 @@ class MultiTimeframeScanner:
                 
                 self.stats['h1_scans'] += 1
                 start_time = time.time()
+                self.disk_cache.clear_timeframe("h1")
                 
                 candidates_list = list(self.candidate_symbols.keys())
                 
                 async with MarketDataFetcher() as fetcher:
                     # Fetch H1 data for candidate symbols only
-                    h1_data = await fetcher.scan_market(candidates_list, config.TIMEFRAMES['value'])
-                    
-                    # Update cache
-                    self.h1_data_cache = h1_data
+                    h1_data = await fetcher.scan_market(
+                        candidates_list,
+                        config.TIMEFRAMES['value']
+                    )
                     
                     # Filter symbols in value zone
                     new_watchlist = {}
                     
                     for symbol in candidates_list:
-                        if symbol not in h1_data or symbol not in self.h4_data_cache:
+                        if symbol not in h1_data:
                             continue
                         
                         trend = self.candidate_symbols[symbol]
+                        df_h4 = self.disk_cache.load_df("h4", symbol)
+                        if df_h4 is None:
+                            continue
+
                         df_h1 = self.strategy.calculate_indicators(h1_data[symbol])
-                        df_h4 = self.h4_data_cache[symbol]
                         
                         in_zone, zone_desc, fib_level = self.strategy.is_in_value_zone(
                             df_h1, df_h4, trend
@@ -173,10 +230,12 @@ class MultiTimeframeScanner:
                         
                         if in_zone:
                             new_watchlist[symbol] = trend
+                            self.disk_cache.save_df("h1", symbol, h1_data[symbol])
                             print(f"  🎯 {symbol}: {zone_desc}")
                     
                     # Update hot watchlist
                     self.hot_watchlist = new_watchlist
+                    self.h1_data_cache = {}
                     
                     duration = time.time() - start_time
                     
@@ -187,6 +246,7 @@ class MultiTimeframeScanner:
                 
                 # Wait 15 minutes before next H1 scan
                 print(f"⏸  H1: Chờ {config.SCAN_INTERVAL_H1/60:.0f} phút...")
+                gc.collect()
                 await asyncio.sleep(config.SCAN_INTERVAL_H1)
                 
             except Exception as e:
@@ -221,18 +281,21 @@ class MultiTimeframeScanner:
                 
                 async with MarketDataFetcher() as fetcher:
                     # Fetch M15 data for hot watchlist only
-                    m15_data = await fetcher.scan_market(watchlist, config.TIMEFRAMES['signal'])
+                    m15_data = await fetcher.scan_market(
+                        watchlist,
+                        config.TIMEFRAMES['signal']
+                    )
                     
                     # Check for entry signals
                     for symbol in watchlist:
                         if symbol not in m15_data:
                             continue
                         
-                        if symbol not in self.h4_data_cache or symbol not in self.h1_data_cache:
+                        df_h4 = self.disk_cache.load_df("h4", symbol)
+                        df_h1 = self.disk_cache.load_df("h1", symbol)
+                        if df_h4 is None or df_h1 is None:
                             continue
                         
-                        df_h4 = self.h4_data_cache[symbol]
-                        df_h1 = self.h1_data_cache[symbol]
                         df_m15 = m15_data[symbol]
                         
                         # Analyze for signal
@@ -263,6 +326,7 @@ class MultiTimeframeScanner:
                 
                 # Wait 1-3 minutes before next M15 scan
                 print(f"⏸  M15: Chờ {config.SCAN_INTERVAL_M15/60:.1f} phút...")
+                gc.collect()
                 await asyncio.sleep(config.SCAN_INTERVAL_M15)
                 
             except Exception as e:
@@ -358,7 +422,10 @@ async def run_single_scan():
     # Run one cycle of each stage
     print("\n1️⃣ Quét H4...")
     async with MarketDataFetcher() as fetcher:
-        h4_data = await fetcher.scan_market(scanner.all_symbols, config.TIMEFRAMES['trend'])
+        h4_data = await fetcher.scan_market(
+            scanner.all_symbols,
+            config.TIMEFRAMES['trend']
+        )
         scanner.h4_data_cache = h4_data
         
         for symbol, df in h4_data.items():

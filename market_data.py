@@ -164,10 +164,15 @@ class MarketDataFetcher:
             for name, result in zip(timeframes.keys(), results)
         }
 
-    async def scan_market(self, symbols: List[str], timeframe: str) -> Dict[str, pd.DataFrame]:
+    async def scan_market(
+        self,
+        symbols: List[str],
+        timeframe: str,
+        limit: int = config.CANDLE_LIMIT
+    ) -> Dict[str, pd.DataFrame]:
         """Scan multiple symbols for one timeframe."""
         print(f"🔍 Đang quét {len(symbols)} symbols cho khung {timeframe}...")
-        tasks = [self.fetch_candles(symbol, timeframe) for symbol in symbols]
+        tasks = [self.fetch_candles(symbol, timeframe, limit=limit) for symbol in symbols]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         market_data = {}
         for symbol, result in zip(symbols, results):
