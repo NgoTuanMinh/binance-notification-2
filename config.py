@@ -21,6 +21,7 @@ BINANCE_FUTURE_API_BASE_URL = os.getenv('BINANCE_FUTURE_API_BASE_URL', 'https://
 # Rate Limiting Settings
 MAX_CONCURRENT_REQUESTS = int(os.getenv('MAX_CONCURRENT_REQUESTS', '5'))
 REQUEST_DELAY_SECONDS = float(os.getenv('REQUEST_DELAY_SECONDS', '0.5'))
+SCAN_BATCH_SIZE = int(os.getenv('SCAN_BATCH_SIZE', '25'))  # process symbols in batches to reduce peak RAM
 
 # Symbol Filtering (Performance Optimization)
 # Set to None to scan all symbols, or set a number to limit symbols

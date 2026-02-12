@@ -91,6 +91,13 @@ class MultiTimeframeScanner:
             'm15_scans': 0,
             'total_signals': 0
         }
+
+    @staticmethod
+    def _chunk_symbols(symbols: List[str], batch_size: int):
+        """Yield symbols in small batches to reduce peak memory usage."""
+        size = max(1, batch_size)
+        for i in range(0, len(symbols), size):
+            yield symbols[i:i + size]
     
     async def initialize(self):
         """Initialize by fetching all symbols."""
@@ -139,23 +146,26 @@ class MultiTimeframeScanner:
                 self.disk_cache.clear_timeframe("h4")
                 
                 async with MarketDataFetcher() as fetcher:
-                    # Fetch H4 data for all symbols
-                    h4_data = await fetcher.scan_market(
-                        self.all_symbols,
-                        config.TIMEFRAMES['trend']
-                    )
-                    
                     # Filter symbols with clear trend and structure
                     new_candidates = {}
-                    
-                    for symbol, df in h4_data.items():
-                        df_with_indicators = self.strategy.calculate_indicators(df)
-                        trend = self.strategy.is_trend_aligned(df_with_indicators)
-                        
-                        if trend and trend != TrendDirection.NEUTRAL:
-                            new_candidates[symbol] = trend
-                            self.disk_cache.save_df("h4", symbol, df)
-                            print(f"  ✅ {symbol}: {trend.value}")
+
+                    for batch_symbols in self._chunk_symbols(self.all_symbols, config.SCAN_BATCH_SIZE):
+                        h4_data_batch = await fetcher.scan_market(
+                            batch_symbols,
+                            config.TIMEFRAMES['trend']
+                        )
+
+                        for symbol, df in h4_data_batch.items():
+                            df_with_indicators = self.strategy.calculate_indicators(df)
+                            trend = self.strategy.is_trend_aligned(df_with_indicators)
+
+                            if trend and trend != TrendDirection.NEUTRAL:
+                                new_candidates[symbol] = trend
+                                self.disk_cache.save_df("h4", symbol, df)
+                                print(f"  ✅ {symbol}: {trend.value}")
+
+                        # Release batch dataframe references ASAP
+                        del h4_data_batch
                     
                     # Update candidate list
                     self.candidate_symbols = new_candidates
@@ -204,34 +214,37 @@ class MultiTimeframeScanner:
                 candidates_list = list(self.candidate_symbols.keys())
                 
                 async with MarketDataFetcher() as fetcher:
-                    # Fetch H1 data for candidate symbols only
-                    h1_data = await fetcher.scan_market(
-                        candidates_list,
-                        config.TIMEFRAMES['value']
-                    )
-                    
                     # Filter symbols in value zone
                     new_watchlist = {}
-                    
-                    for symbol in candidates_list:
-                        if symbol not in h1_data:
-                            continue
-                        
-                        trend = self.candidate_symbols[symbol]
-                        df_h4 = self.disk_cache.load_df("h4", symbol)
-                        if df_h4 is None:
-                            continue
 
-                        df_h1 = self.strategy.calculate_indicators(h1_data[symbol])
-                        
-                        in_zone, zone_desc, fib_level = self.strategy.is_in_value_zone(
-                            df_h1, df_h4, trend
+                    for batch_symbols in self._chunk_symbols(candidates_list, config.SCAN_BATCH_SIZE):
+                        h1_data_batch = await fetcher.scan_market(
+                            batch_symbols,
+                            config.TIMEFRAMES['value']
                         )
-                        
-                        if in_zone:
-                            new_watchlist[symbol] = trend
-                            self.disk_cache.save_df("h1", symbol, h1_data[symbol])
-                            print(f"  🎯 {symbol}: {zone_desc}")
+
+                        for symbol in batch_symbols:
+                            if symbol not in h1_data_batch:
+                                continue
+
+                            trend = self.candidate_symbols[symbol]
+                            df_h4 = self.disk_cache.load_df("h4", symbol)
+                            if df_h4 is None:
+                                continue
+
+                            df_h1 = self.strategy.calculate_indicators(h1_data_batch[symbol])
+
+                            in_zone, zone_desc, fib_level = self.strategy.is_in_value_zone(
+                                df_h1, df_h4, trend
+                            )
+
+                            if in_zone:
+                                new_watchlist[symbol] = trend
+                                self.disk_cache.save_df("h1", symbol, h1_data_batch[symbol])
+                                print(f"  🎯 {symbol}: {zone_desc}")
+
+                        # Release batch dataframe references ASAP
+                        del h1_data_batch
                     
                     # Update hot watchlist
                     self.hot_watchlist = new_watchlist
