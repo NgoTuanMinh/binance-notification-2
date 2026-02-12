@@ -19,7 +19,6 @@ class MarketDataFetcher:
         """Initialize Binance USDT-M Futures (chỉ dùng fapi.binance.com, không dùng dapi)."""
         base_url = (config.BINANCE_FUTURE_API_BASE_URL or 'https://fapi.binance.com/').rstrip('/')
 
-        # Dùng binanceusdm → CHỈ gọi fapi.binance.com (USDT-M), không bao giờ gọi dapi.binance.com (COIN-M)
         self.exchange = ccxt.binance({
             'apiKey': config.BINANCE_API_KEY or '',
             'secret': config.BINANCE_SECRET_KEY or '',
@@ -32,12 +31,28 @@ class MarketDataFetcher:
         })
         self.semaphore = asyncio.Semaphore(config.MAX_CONCURRENT_REQUESTS)
         self.request_delay = config.REQUEST_DELAY_SECONDS
+        self._closed = False
 
     async def __aenter__(self):
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        await self.exchange.close()
+        await self.close()
+
+    async def close(self):
+        """
+        Close ccxt exchange session safely.
+        Uses shield so cancellation/reload does not skip closing aiohttp session.
+        """
+        if self._closed:
+            return
+        try:
+            await asyncio.shield(self.exchange.close())
+        except Exception:
+            # Avoid crashing shutdown path; we only need best-effort cleanup.
+            pass
+        finally:
+            self._closed = True
 
     async def get_futures_symbols(self, sort_by: str = 'volume', limit: Optional[int] = None) -> List[str]:
         """Fetch USDT-margined futures symbols. sort_by: 'volume' or 'alphabetical'."""
