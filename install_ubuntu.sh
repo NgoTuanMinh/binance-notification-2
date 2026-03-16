@@ -95,10 +95,9 @@ else
     echo -e "${GREEN}✅ pip3 installed${NC}"
 fi
 
-# Upgrade pip
-echo -e "${YELLOW}Upgrading pip...${NC}"
-python3 -m pip install --upgrade pip --user
-echo -e "${GREEN}✅ pip upgraded${NC}"
+# Debian 12+/Ubuntu newer releases may enforce PEP 668 for system Python.
+# Do NOT upgrade system pip here; only upgrade pip inside venv (Step 5).
+echo -e "${YELLOW}Skipping system pip upgrade (PEP 668 safe).${NC}"
 echo ""
 
 # Step 5: Virtual Environment
