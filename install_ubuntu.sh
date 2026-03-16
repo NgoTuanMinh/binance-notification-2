@@ -204,7 +204,7 @@ echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
     USER=$(whoami)
     WORK_DIR=$(pwd)
-    SERVICE_FILE="/etc/systemd/system/binance-bot.service"
+    SERVICE_FILE="/etc/systemd/system/binance-notification-2.service"
     
     echo -e "${YELLOW}Creating systemd service file...${NC}"
     $SUDO tee $SERVICE_FILE > /dev/null <<EOF
@@ -234,11 +234,11 @@ EOF
     
     echo ""
     echo -e "${YELLOW}Service commands:${NC}"
-    echo "  Start:   sudo systemctl start binance-bot"
-    echo "  Stop:    sudo systemctl stop binance-bot"
-    echo "  Status:  sudo systemctl status binance-bot"
-    echo "  Enable:  sudo systemctl enable binance-bot  (auto-start on boot)"
-    echo "  Logs:    sudo journalctl -u binance-bot -f"
+    echo "  Start:   sudo systemctl start binance-notification-2"
+    echo "  Stop:    sudo systemctl stop binance-notification-2"
+    echo "  Status:  sudo systemctl status binance-notification-2"
+    echo "  Enable:  sudo systemctl enable binance-notification-2  (auto-start on boot)"
+    echo "  Logs:    sudo journalctl -u binance-notification-2 -f"
     echo ""
 fi
 
@@ -273,8 +273,8 @@ if [ $IMPORT_STATUS -eq 0 ]; then
     echo "   python main.py"
     echo ""
     echo "   Or using systemd service (if configured):"
-    echo "   sudo systemctl start binance-bot"
-    echo "   sudo systemctl enable binance-bot  # auto-start on boot"
+    echo "   sudo systemctl start binance-notification-2"
+    echo "   sudo systemctl enable binance-notification-2  # auto-start on boot"
     echo ""
     echo -e "${YELLOW}📖 Documentation:${NC}"
     echo "   - START_HERE.md      Quick start guide"
@@ -285,7 +285,7 @@ if [ $IMPORT_STATUS -eq 0 ]; then
     echo -e "${YELLOW}💡 Tips:${NC}"
     echo "   - Always activate venv: source venv/bin/activate"
     echo "   - View logs: tail -f bot.log"
-    echo "   - Monitor with: sudo systemctl status binance-bot"
+    echo "   - Monitor with: sudo systemctl status binance-notification-2"
     echo ""
 else
     echo -e "${RED}⚠️  Some packages failed to import${NC}"
