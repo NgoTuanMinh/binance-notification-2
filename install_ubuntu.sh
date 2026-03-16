@@ -48,24 +48,51 @@ echo ""
 
 # Step 2: Check Python
 echo -e "${GREEN}2️⃣  Checking Python installation...${NC}"
-if command -v python3 &> /dev/null; then
-    PYTHON_VERSION=$(python3 --version)
-    echo -e "${GREEN}✅ Found: $PYTHON_VERSION${NC}"
-    
-    # Check Python version (need 3.8+)
-    PYTHON_VER=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
-    REQUIRED_VER="3.8"
-    
-    if [ "$(printf '%s\n' "$REQUIRED_VER" "$PYTHON_VER" | sort -V | head -n1)" = "$REQUIRED_VER" ]; then 
-        echo -e "${GREEN}✅ Python version is sufficient (>= 3.8)${NC}"
-    else
-        echo -e "${RED}❌ Python 3.8+ required, found $PYTHON_VER${NC}"
-        exit 1
-    fi
+TARGET_PYTHON_BIN=""
+TARGET_PYTHON_VERSION="3.12"
+PYENV_PYTHON_VERSION="3.12.7"
+
+if command -v python3.12 &> /dev/null; then
+    TARGET_PYTHON_BIN="python3.12"
+    echo -e "${GREEN}✅ Found Python 3.12 in PATH${NC}"
 else
-    echo -e "${YELLOW}⚠️  Python 3 not found. Installing...${NC}"
-    $SUDO apt-get install -y python3 python3-pip python3-venv
-    echo -e "${GREEN}✅ Python 3 installed${NC}"
+    echo -e "${YELLOW}⚠️  Python 3.12 not found. Trying apt install...${NC}"
+    if $SUDO apt-get install -y python3.12 python3.12-venv python3.12-dev >/dev/null 2>&1; then
+        TARGET_PYTHON_BIN="python3.12"
+        echo -e "${GREEN}✅ Installed Python 3.12 from apt${NC}"
+    else
+        echo -e "${YELLOW}⚠️  apt doesn't provide Python 3.12 here. Falling back to pyenv...${NC}"
+
+        # Build deps for pyenv
+        $SUDO apt-get install -y \
+            build-essential libssl-dev zlib1g-dev libbz2-dev libreadline-dev \
+            libsqlite3-dev curl git libncursesw5-dev xz-utils tk-dev libffi-dev \
+            liblzma-dev ca-certificates
+
+        export PYENV_ROOT="$HOME/.pyenv"
+        export PATH="$PYENV_ROOT/bin:$PATH"
+
+        if [ ! -d "$PYENV_ROOT" ]; then
+            git clone https://github.com/pyenv/pyenv.git "$PYENV_ROOT"
+        fi
+
+        export PATH="$PYENV_ROOT/shims:$PATH"
+        eval "$(pyenv init -)"
+
+        pyenv install -s "$PYENV_PYTHON_VERSION"
+        TARGET_PYTHON_BIN="$PYENV_ROOT/versions/$PYENV_PYTHON_VERSION/bin/python"
+        echo -e "${GREEN}✅ Installed Python $PYENV_PYTHON_VERSION via pyenv${NC}"
+    fi
+fi
+
+PYTHON_VERSION=$($TARGET_PYTHON_BIN --version)
+echo -e "${GREEN}✅ Using: $PYTHON_VERSION${NC}"
+
+PYTHON_VER=$($TARGET_PYTHON_BIN -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
+REQUIRED_VER="3.12"
+if [ "$(printf '%s\n' "$REQUIRED_VER" "$PYTHON_VER" | sort -V | head -n1)" != "$REQUIRED_VER" ]; then
+    echo -e "${RED}❌ Python >= 3.12 required, found $PYTHON_VER${NC}"
+    exit 1
 fi
 echo ""
 
@@ -109,13 +136,13 @@ if [ -d "venv" ]; then
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         rm -rf venv
-        python3 -m venv venv
+        $TARGET_PYTHON_BIN -m venv venv
         echo -e "${GREEN}✅ Virtual environment recreated${NC}"
     else
         echo -e "${YELLOW}Using existing venv${NC}"
     fi
 else
-    python3 -m venv venv
+    $TARGET_PYTHON_BIN -m venv venv
     echo -e "${GREEN}✅ Virtual environment created${NC}"
 fi
 
