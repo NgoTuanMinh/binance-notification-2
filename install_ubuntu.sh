@@ -1,5 +1,5 @@
 #!/bin/bash
-# Installation script for Ubuntu 22.04 LTS
+# Installation script for Ubuntu/Debian (apt-based)
 # Automated setup for Binance Futures Scanner
 
 set -e  # Exit on error
@@ -12,7 +12,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 echo -e "${BLUE}╔════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║  🚀 Binance Futures Scanner - Ubuntu Installation        ║${NC}"
+echo -e "${BLUE}║  🚀 Binance Futures Scanner - Ubuntu/Debian Install     ║${NC}"
 echo -e "${BLUE}╚════════════════════════════════════════════════════════════╝${NC}"
 echo ""
 
@@ -22,9 +22,27 @@ if [ "$EUID" -eq 0 ]; then
     echo ""
 fi
 
+# Detect apt-based distro
+if ! command -v apt-get &> /dev/null; then
+    echo -e "${RED}❌ This script requires apt-get (Ubuntu/Debian).${NC}"
+    exit 1
+fi
+
+# Use sudo only when needed/available
+if [ "$EUID" -eq 0 ]; then
+    SUDO=""
+else
+    if command -v sudo &> /dev/null; then
+        SUDO="sudo"
+    else
+        echo -e "${RED}❌ sudo not found. Run this script as root or install sudo.${NC}"
+        exit 1
+    fi
+fi
+
 # Step 1: Update system
 echo -e "${GREEN}1️⃣  Updating system packages...${NC}"
-sudo apt-get update -qq
+$SUDO apt-get update -qq
 echo -e "${GREEN}✅ System updated${NC}"
 echo ""
 
@@ -46,14 +64,14 @@ if command -v python3 &> /dev/null; then
     fi
 else
     echo -e "${YELLOW}⚠️  Python 3 not found. Installing...${NC}"
-    sudo apt-get install -y python3 python3-pip python3-venv
+    $SUDO apt-get install -y python3 python3-pip python3-venv
     echo -e "${GREEN}✅ Python 3 installed${NC}"
 fi
 echo ""
 
 # Step 3: Install system dependencies
 echo -e "${GREEN}3️⃣  Installing system dependencies...${NC}"
-sudo apt-get install -y \
+$SUDO apt-get install -y \
     python3-dev \
     python3-pip \
     python3-venv \
@@ -73,7 +91,7 @@ if command -v pip3 &> /dev/null; then
     echo -e "${GREEN}✅ Found: $PIP_VERSION${NC}"
 else
     echo -e "${YELLOW}Installing pip3...${NC}"
-    sudo apt-get install -y python3-pip
+    $SUDO apt-get install -y python3-pip
     echo -e "${GREEN}✅ pip3 installed${NC}"
 fi
 
@@ -163,7 +181,7 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
     SERVICE_FILE="/etc/systemd/system/binance-bot.service"
     
     echo -e "${YELLOW}Creating systemd service file...${NC}"
-    sudo tee $SERVICE_FILE > /dev/null <<EOF
+    $SUDO tee $SERVICE_FILE > /dev/null <<EOF
 [Unit]
 Description=Binance Futures Scanner Bot
 After=network.target
@@ -186,7 +204,7 @@ EOF
     echo -e "${GREEN}✅ Service file created at $SERVICE_FILE${NC}"
     
     # Reload systemd
-    sudo systemctl daemon-reload
+    $SUDO systemctl daemon-reload
     
     echo ""
     echo -e "${YELLOW}Service commands:${NC}"
