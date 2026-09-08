@@ -74,29 +74,40 @@ class TelegramBot:
         rr_ratio = reward / risk if risk > 0 else 0
         
         # Build indicators section
-        indicators_text = f"""📊 *Chỉ báo:*
-• H4 EMA200: `{signal.h4_ema200:.4f}`
-• H1 EMA34: `{signal.h1_ema34:.4f}`
-• H1 EMA89: `{signal.h1_ema89:.4f}`
-• RSI(14): `{signal.rsi:.2f}`
-• Volume: `{signal.volume_ratio:.2f}x` trung bình"""
+        indicators_parts = [
+            f"• H4 EMA200: `{signal.h4_ema200:.4f}`",
+            f"• H1 EMA34: `{signal.h1_ema34:.4f}`",
+            f"• H1 EMA89: `{signal.h1_ema89:.4f}`",
+            f"• RSI(14): `{signal.rsi:.2f}`",
+            f"• Volume M15: `{signal.volume_ratio:.2f}x` trung bình"
+        ]
+
+        if signal.atr is not None:
+            mult_str = f" ({signal.atr_multiplier}x)" if signal.atr_multiplier else ""
+            indicators_parts.append(f"• ATR(14): `{signal.atr:.4f}`{mult_str}")
+
+        if signal.rvol is not None:
+            rvol_badge = " 🔥" if signal.rvol >= 2.0 else ""
+            indicators_parts.append(f"• RVOL (24h/7d): `{signal.rvol:.2f}x`{rvol_badge}")
         
-        # Add Fibonacci if available
         if signal.fib_level is not None:
-            indicators_text += f"\n• Fibonacci: `{signal.fib_level:.3f}` level"
+            indicators_parts.append(f"• Fibonacci: `{signal.fib_level:.3f}` level")
         
-        indicators_text += f"\n• Giá hiện tại: `{signal.current_price:.4f}`"
+        indicators_parts.append(f"• Giá hiện tại: `{signal.current_price:.4f}`")
         
+        indicators_text = "📊 *Chỉ báo:*\n" + "\n".join(indicators_parts)
+        
+        flip_badge = "\n🔄 *Vùng cản:* `FLIP ZONE (Breakout & Retest)`\n" if getattr(signal, 'is_flip_zone', False) else ""
+
         # Format message
         message = f"""
 {direction_emoji} *TÍN HIỆU {direction_text}* {direction_emoji}
 
 📊 *Cặp:* `{signal.symbol}`
 💰 *Giá Entry:* `{signal.entry_price:.4f}`
-🛑 *Stop Loss:* `{signal.stop_loss:.4f}` ({risk/signal.entry_price*100:.2f}%)
+🛑 *Stop Loss:* `{signal.stop_loss:.4f}` ({risk/signal.entry_price*100:.2f}% | ATR)
 🎯 *Take Profit:* `{signal.take_profit:.4f}` ({reward/signal.entry_price*100:.2f}%)
-📈 *R:R Ratio:* `1:{rr_ratio:.2f}`
-
+📈 *R:R Ratio:* `1:{rr_ratio:.2f}`{flip_badge}
 ⏰ *Khung thời gian:* {signal.timeframe}
 🔍 *Pattern:* {signal.pattern}
 
@@ -104,7 +115,6 @@ class TelegramBot:
 {signal.reason}
 
 {indicators_text}
-
         """.strip()
         
         return message

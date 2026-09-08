@@ -83,6 +83,7 @@ class MultiTimeframeScanner:
         # Data cache
         self.h4_data_cache: Dict[str, pd.DataFrame] = {}
         self.h1_data_cache: Dict[str, pd.DataFrame] = {}
+        self.rvol_cache: Dict[str, float] = {}  # Cache RVOL 24h/7d
         
         # Statistics
         self.stats = {
@@ -164,9 +165,24 @@ class MultiTimeframeScanner:
                                 self.disk_cache.save_df("h4", symbol, df)
                                 print(f"  ✅ {symbol}: {trend.value}")
 
-                        # Release batch dataframe references ASAP
-                        del h4_data_batch
-                    
+                    # Tính toán & lọc RVOL cho các symbols vượt qua H4
+                    if new_candidates:
+                        cand_symbols = list(new_candidates.keys())
+                        print(f"📊 Đang tính RVOL (24h vs 7d) cho {len(cand_symbols)} candidates H4...")
+                        rvol_map = await fetcher.fetch_rvol_batch(cand_symbols, lookback_days=config.RVOL_LOOKBACK_DAYS)
+                        self.rvol_cache.update(rvol_map)
+
+                        if config.ENABLE_RVOL_FILTER:
+                            filtered_candidates = {}
+                            for sym, trend in new_candidates.items():
+                                rvol_val = self.rvol_cache.get(sym, 1.0)
+                                if rvol_val >= config.RVOL_THRESHOLD:
+                                    filtered_candidates[sym] = trend
+                                    print(f"  🔥 RVOL đạt chuẩn: {sym} ({rvol_val:.2f}x >= {config.RVOL_THRESHOLD}x)")
+                                else:
+                                    print(f"  ⚠️ Bỏ qua {sym}: RVOL {rvol_val:.2f}x < {config.RVOL_THRESHOLD}x (thiếu dòng tiền)")
+                            new_candidates = filtered_candidates
+
                     # Update candidate list
                     self.candidate_symbols = new_candidates
                     self.h4_data_cache = {}
@@ -234,6 +250,7 @@ class MultiTimeframeScanner:
 
                             df_h1 = self.strategy.calculate_indicators(h1_data_batch[symbol])
 
+                            # pyrefly: ignore [bad-unpacking]
                             in_zone, zone_desc, fib_level = self.strategy.is_in_value_zone(
                                 df_h1, df_h4, trend
                             )
@@ -310,9 +327,10 @@ class MultiTimeframeScanner:
                             continue
                         
                         df_m15 = m15_data[symbol]
+                        rvol_val = self.rvol_cache.get(symbol)
                         
                         # Analyze for signal
-                        signal = self.strategy.analyze_symbol(symbol, df_h4, df_h1, df_m15)
+                        signal = self.strategy.analyze_symbol(symbol, df_h4, df_h1, df_m15, rvol=rvol_val)
                         
                         if signal:
                             # Create unique key for deduplication
@@ -447,8 +465,29 @@ async def run_single_scan():
             if trend:
                 scanner.candidate_symbols[symbol] = trend
     
-    print(f"   ✅ {len(scanner.candidate_symbols)} candidates")
+    print(f"   ✅ {len(scanner.candidate_symbols)} candidates H4 ban đầu")
     
+    # Tính toán & lọc RVOL cho run_single_scan
+    if scanner.candidate_symbols:
+        async with MarketDataFetcher() as fetcher:
+            cand_syms = list(scanner.candidate_symbols.keys())
+            print(f"📊 Đang tính RVOL (24h vs 7d) cho {len(cand_syms)} candidates...")
+            rvol_map = await fetcher.fetch_rvol_batch(cand_syms, lookback_days=config.RVOL_LOOKBACK_DAYS)
+            scanner.rvol_cache.update(rvol_map)
+
+            if config.ENABLE_RVOL_FILTER:
+                filtered_candidates = {}
+                for sym, trend in scanner.candidate_symbols.items():
+                    rvol_val = scanner.rvol_cache.get(sym, 1.0)
+                    if rvol_val >= config.RVOL_THRESHOLD:
+                        filtered_candidates[sym] = trend
+                        print(f"   🔥 RVOL đạt chuẩn: {sym} ({rvol_val:.2f}x >= {config.RVOL_THRESHOLD}x)")
+                    else:
+                        print(f"   ⚠️ Bỏ qua {sym}: RVOL {rvol_val:.2f}x < {config.RVOL_THRESHOLD}x (thiếu dòng tiền)")
+                scanner.candidate_symbols = filtered_candidates
+
+        print(f"   ✅ {len(scanner.candidate_symbols)} candidates sau khi lọc RVOL")
+
     if scanner.candidate_symbols:
         print("\n2️⃣ Quét H1...")
         async with MarketDataFetcher() as fetcher:
@@ -462,11 +501,13 @@ async def run_single_scan():
                 if symbol in h1_data and symbol in scanner.h4_data_cache:
                     df_h1 = scanner.strategy.calculate_indicators(h1_data[symbol])
                     df_h4 = scanner.h4_data_cache[symbol]
-                    in_zone, zone_desc, fib = scanner.strategy.is_in_value_zone(
+                    in_zone, zone_desc, fib, is_flip = scanner.strategy.is_in_value_zone(
                         df_h1, df_h4, trend
                     )
                     if in_zone:
                         scanner.hot_watchlist[symbol] = trend
+                        flip_tag = " [FLIP ZONE]" if is_flip else ""
+                        print(f"   🎯 {symbol}: {zone_desc}{flip_tag}")
         
         print(f"   ✅ {len(scanner.hot_watchlist)} in watchlist")
     
@@ -485,7 +526,8 @@ async def run_single_scan():
                         symbol,
                         scanner.h4_data_cache[symbol],
                         scanner.h1_data_cache[symbol],
-                        m15_data[symbol]
+                        m15_data[symbol],
+                        rvol=scanner.rvol_cache.get(symbol)
                     )
                     if signal:
                         signals.append(signal)

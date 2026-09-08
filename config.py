@@ -66,9 +66,21 @@ FIB_LEVEL_MAX = 0.618 # Maximum Fibonacci level
 # H1 Strong Support/Resistance Zone Filter
 H1_SR_LOOKBACK_CANDLES = int(os.getenv('H1_SR_LOOKBACK_CANDLES', '180'))  # ~7.5 days of H1 candles
 H1_SR_SWING_LOOKBACK = int(os.getenv('H1_SR_SWING_LOOKBACK', '3'))        # swing detection sensitivity
-H1_SR_MIN_TOUCHES = int(os.getenv('H1_SR_MIN_TOUCHES', '5'))              # minimum touches to call a zone "strong"
+H1_SR_MIN_TOUCHES = int(os.getenv('H1_SR_MIN_TOUCHES', '3'))              # minimum touches to call a zone "strong"
 H1_SR_ZONE_MIN_PERCENT = float(os.getenv('H1_SR_ZONE_MIN_PERCENT', '1.0'))  # zone half-width min (%)
 H1_SR_ZONE_MAX_PERCENT = float(os.getenv('H1_SR_ZONE_MAX_PERCENT', '1.5'))  # zone half-width max (%)
+H1_REQUIRE_FLIP_ZONE = os.getenv('H1_REQUIRE_FLIP_ZONE', 'False').lower() == 'true'  # True: chỉ lấy Flip Zone; False: ưu tiên Flip Zone nếu có
+
+# ATR Dynamic Stop Loss & Take Profit Parameters
+ATR_PERIOD = int(os.getenv('ATR_PERIOD', '14'))              # chu kỳ ATR
+ATR_MULTIPLIER = float(os.getenv('ATR_MULTIPLIER', '1.5'))   # hệ số nhân ATR cho khoảng cách SL (1.5 hoặc 2.0)
+ATR_TIMEFRAME = os.getenv('ATR_TIMEFRAME', '15m')            # khung thời gian tính ATR ('15m' hoặc '1h')
+REWARD_RATIO = float(os.getenv('REWARD_RATIO', '2.0'))       # tỷ lệ R:R (1:2)
+
+# Relative Volume (RVOL) Filter
+ENABLE_RVOL_FILTER = os.getenv('ENABLE_RVOL_FILTER', 'True').lower() == 'true'  # bật/tắt bộ lọc dòng tiền RVOL
+RVOL_THRESHOLD = float(os.getenv('RVOL_THRESHOLD', '1.5'))                      # khối lượng 24h >= 1.5x TB 7 ngày
+RVOL_LOOKBACK_DAYS = int(os.getenv('RVOL_LOOKBACK_DAYS', '7'))                 # số ngày so sánh trung bình (7 ngày)
 
 # Volume Parameters
 VOLUME_MA_PERIOD = 34  # Period for volume moving average
@@ -78,10 +90,9 @@ VOLUME_MULTIPLIER = 1.0  # Current volume must be >= this * average
 PINBAR_WICK_RATIO = 0.6  # Wick must be at least 60% of candle range
 ENGULFING_BODY_RATIO = 1.0  # Body must fully engulf previous candle
 
-# Stop Loss (khoảng cách từ entry, theo % giá)
-# Nếu SL từ nến quá ngắn → nới ra tối thiểu STOP_LOSS_MIN_PERCENT; quá xa → thu lại tối đa STOP_LOSS_MAX_PERCENT
+# Safety Stop Loss Guard (khoảng cách từ entry theo % giá phòng hờ)
 STOP_LOSS_MIN_PERCENT = float(os.getenv('STOP_LOSS_MIN_PERCENT', '0.3'))   # tối thiểu 0.3%
-STOP_LOSS_MAX_PERCENT = float(os.getenv('STOP_LOSS_MAX_PERCENT', '3.0'))   # tối đa 3%
+STOP_LOSS_MAX_PERCENT = float(os.getenv('STOP_LOSS_MAX_PERCENT', '5.0'))   # tối đa 5.0% (giữ khoảng rộng cho ATR)
 
 # Candle lookback periods
 CANDLE_LIMIT = 500   # Number of candles to fetch per request

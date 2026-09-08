@@ -181,6 +181,60 @@ class MarketDataFetcher:
         print(f"✅ Lấy thành công dữ liệu cho {len(market_data)}/{len(symbols)} symbols")
         return market_data
 
+    async def fetch_rvol(
+        self,
+        symbol: str,
+        lookback_days: int = 7
+    ) -> float:
+        """
+        Calculate Relative Volume (RVOL):
+        24h current volume / average 24h volume of the previous N days (default: 7 days).
+        Uses daily candles (1d).
+        """
+        try:
+            limit = max(lookback_days + 3, 10)
+            df_1d = await self.fetch_candles(symbol, '1d', limit=limit)
+            if df_1d is None or len(df_1d) < lookback_days + 1:
+                return 1.0
+
+            # 7 nến ngày hoàn chỉnh trước ngày hôm nay
+            past_candles = df_1d.iloc[-(lookback_days + 1):-1]
+            avg_7d_vol = float(past_candles['volume'].mean())
+
+            # Lấy 24h rolling volume từ ticker nếu khả dụng
+            current_24h_vol = None
+            try:
+                ticker = await self.exchange.fetch_ticker(symbol)
+                if ticker and ticker.get('baseVolume') is not None:
+                    current_24h_vol = float(ticker['baseVolume'])
+            except Exception:
+                current_24h_vol = None
+
+            if current_24h_vol is None or current_24h_vol <= 0:
+                current_24h_vol = float(df_1d['volume'].iloc[-1])
+
+            if avg_7d_vol and avg_7d_vol > 0:
+                return round(float(current_24h_vol / avg_7d_vol), 2)
+            return 1.0
+        except Exception as e:
+            print(f"⚠️  Không thể tính RVOL cho {symbol}: {e}")
+            return 1.0
+
+    async def fetch_rvol_batch(
+        self,
+        symbols: List[str],
+        lookback_days: int = 7
+    ) -> Dict[str, float]:
+        """Fetch RVOL for multiple symbols concurrently."""
+        if not symbols:
+            return {}
+        tasks = [self.fetch_rvol(sym, lookback_days) for sym in symbols]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        rvol_map = {}
+        for sym, res in zip(symbols, results):
+            rvol_map[sym] = float(res) if isinstance(res, (int, float)) else 1.0
+        return rvol_map
+
 
 async def test_market_data():
     """Test market data fetching."""

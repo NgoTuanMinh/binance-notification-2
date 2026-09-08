@@ -36,14 +36,18 @@ class Signal:
     rsi: float
     volume_ratio: float
     fib_level: Optional[float] = None
+    atr: Optional[float] = None
+    atr_multiplier: Optional[float] = None
+    rvol: Optional[float] = None
+    is_flip_zone: bool = False
 
 
 class StrategyEngine:
     """
     Implements the enhanced 3-step filtering strategy:
     1. H4: Price above/below EMA 200 + Higher High/Higher Low structure
-    2. H1: Pullback to Fibonacci 0.5-0.618 or EMA 34/89
-    3. M15: Candlestick patterns + RSI Divergence + Volume confirmation
+    2. H1: Pullback to Fibonacci 0.5-0.618 or EMA 34/89 + Strong S/R / Flip Zone
+    3. M15: Candlestick patterns + RSI Divergence + Volume confirmation + Dynamic ATR SL/TP
     """
     
     def __init__(self):
@@ -51,6 +55,9 @@ class StrategyEngine:
         self.ema_fast = config.EMA_VALUE_FAST
         self.ema_slow = config.EMA_VALUE_SLOW
         self.rsi_period = config.RSI_PERIOD
+        self.atr_period = config.ATR_PERIOD
+        self.atr_multiplier = config.ATR_MULTIPLIER
+        self.reward_ratio = config.REWARD_RATIO
     
     def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -78,6 +85,9 @@ class StrategyEngine:
         
         # Calculate Volume MA
         df['volume_ma'] = df['volume'].rolling(window=config.VOLUME_MA_PERIOD).mean()
+        
+        # Calculate ATR (Average True Range)
+        df['atr'] = ta.atr(high=df['high'], low=df['low'], close=df['close'], length=self.atr_period)
         
         return df
     
@@ -246,64 +256,105 @@ class StrategyEngine:
 
         return float(np.clip(range_pct, min_pct, max_pct))
 
-    def _cluster_levels_to_strong_zones(
-        self,
-        levels: List[float],
-        zone_percent: float
-    ) -> List[Dict]:
-        """Cluster nearby swing levels; keep clusters with enough touches as strong zones."""
-        clean_levels = sorted([float(x) for x in levels if pd.notna(x) and x > 0])
-        if not clean_levels:
-            return []
-
-        clusters: List[List[float]] = [[clean_levels[0]]]
-        for level in clean_levels[1:]:
-            current_center = float(np.mean(clusters[-1]))
-            diff_pct = abs(level - current_center) / current_center * 100
-            if diff_pct <= zone_percent:
-                clusters[-1].append(level)
-            else:
-                clusters.append([level])
-
-        zones = []
-        for cluster in clusters:
-            touches = len(cluster)
-            if touches < config.H1_SR_MIN_TOUCHES:
-                continue
-
-            level = float(np.mean(cluster))
-            half_width = level * (zone_percent / 100.0)
-            zones.append({
-                'level': level,
-                'touches': touches,
-                'zone_percent': zone_percent,
-                'zone_low': level - half_width,
-                'zone_high': level + half_width,
-            })
-
-        return zones
-
     def find_strong_h1_zones(self, df_h1: pd.DataFrame) -> Dict[str, List[Dict]]:
         """
         Build strong support/resistance zones on H1 from clustered swing highs/lows.
+        Identifies Flip Zones (Resistance turned Support or Support turned Resistance via Breakout & Retest).
         """
-        if df_h1 is None or len(df_h1) < max(50, config.H1_SR_LOOKBACK_CANDLES):
+        if df_h1 is None or len(df_h1) < 50:
             return {'supports': [], 'resistances': []}
 
-        recent_df = df_h1.tail(config.H1_SR_LOOKBACK_CANDLES).reset_index(drop=True)
+        lookback = min(len(df_h1), config.H1_SR_LOOKBACK_CANDLES)
+        recent_df = df_h1.tail(lookback).reset_index(drop=True)
         swing_highs, swing_lows = self.find_swing_points(
             recent_df,
             lookback=config.H1_SR_SWING_LOOKBACK
         )
 
-        support_levels = [recent_df['low'].iloc[i] for i in swing_lows]
-        resistance_levels = [recent_df['high'].iloc[i] for i in swing_highs]
         zone_percent = self._calculate_h1_sr_zone_percent(recent_df)
 
-        supports = self._cluster_levels_to_strong_zones(support_levels, zone_percent)
-        resistances = self._cluster_levels_to_strong_zones(resistance_levels, zone_percent)
+        # Gom tất cả các swing points kèm index và loại swing
+        all_swings = []
+        for i in swing_highs:
+            all_swings.append({'idx': i, 'price': float(recent_df['high'].iloc[i]), 'type': 'HIGH'})
+        for i in swing_lows:
+            all_swings.append({'idx': i, 'price': float(recent_df['low'].iloc[i]), 'type': 'LOW'})
 
-        # Sort for easier nearest-zone matching
+        if not all_swings:
+            return {'supports': [], 'resistances': []}
+
+        all_swings.sort(key=lambda s: s['price'])
+
+        # Gom cụm theo khoảng cách %
+        clusters: List[List[Dict]] = [[all_swings[0]]]
+        for s in all_swings[1:]:
+            current_center = float(np.mean([item['price'] for item in clusters[-1]]))
+            diff_pct = abs(s['price'] - current_center) / current_center * 100
+            if diff_pct <= zone_percent:
+                clusters[-1].append(s)
+            else:
+                clusters.append([s])
+
+        supports = []
+        resistances = []
+        closes = recent_df['close']
+
+        for cluster in clusters:
+            touches = len(cluster)
+            if touches < config.H1_SR_MIN_TOUCHES:
+                continue
+
+            prices = [item['price'] for item in cluster]
+            level = float(np.mean(prices))
+            half_width = level * (zone_percent / 100.0)
+            zone_low = level - half_width
+            zone_high = level + half_width
+
+            high_swings = [item for item in cluster if item['type'] == 'HIGH']
+            low_swings = [item for item in cluster if item['type'] == 'LOW']
+
+            # 1. Flip Resistance -> Support (Ưu tiên cho LONG - Breakout & Retest):
+            # Từng là đỉnh kháng cự trong quá khứ, sau đó có nến H1 đóng cửa breakout qua đỉnh zone
+            is_flip_r_to_s = False
+            if high_swings:
+                earliest_high_idx = min(item['idx'] for item in high_swings)
+                has_breakout_above = bool((closes.iloc[earliest_high_idx:] > zone_high).any())
+                if has_breakout_above:
+                    is_flip_r_to_s = True
+
+            # 2. Flip Support -> Resistance (Ưu tiên cho SHORT - Breakdown & Retest):
+            # Từng là đáy hỗ trợ trong quá khứ, sau đó có nến H1 đóng cửa breakdown thủng đáy zone
+            is_flip_s_to_r = False
+            if low_swings:
+                earliest_low_idx = min(item['idx'] for item in low_swings)
+                has_breakdown_below = bool((closes.iloc[earliest_low_idx:] < zone_low).any())
+                if has_breakdown_below:
+                    is_flip_s_to_r = True
+
+            zone_info = {
+                'level': level,
+                'touches': touches,
+                'high_touches': len(high_swings),
+                'low_touches': len(low_swings),
+                'zone_percent': zone_percent,
+                'zone_low': zone_low,
+                'zone_high': zone_high,
+                'is_flip_r_to_s': is_flip_r_to_s,
+                'is_flip_s_to_r': is_flip_s_to_r,
+            }
+
+            # Zone làm Support (cho LONG) nếu có đáy hỗ trợ hoặc là Flip R->S
+            if len(low_swings) > 0 or is_flip_r_to_s:
+                zone_s = dict(zone_info)
+                zone_s['is_flip'] = is_flip_r_to_s
+                supports.append(zone_s)
+
+            # Zone làm Resistance (cho SHORT) nếu có đỉnh kháng cự hoặc là Flip S->R
+            if len(high_swings) > 0 or is_flip_s_to_r:
+                zone_r = dict(zone_info)
+                zone_r['is_flip'] = is_flip_s_to_r
+                resistances.append(zone_r)
+
         supports = sorted(supports, key=lambda z: z['level'])
         resistances = sorted(resistances, key=lambda z: z['level'])
 
@@ -313,15 +364,18 @@ class StrategyEngine:
         self,
         df_h1: pd.DataFrame,
         trend: TrendDirection
-    ) -> Tuple[bool, str]:
+    ) -> Tuple[bool, str, bool]:
         """
         Confirm current H1 candle is touching a strong zone:
-        - Bullish: strong support zone
-        - Bearish: strong resistance zone
+        - Bullish: strong support zone (Ưu tiên Flip Zone: Resistance -> Support [Breakout & Retest])
+        - Bearish: strong resistance zone (Ưu tiên Flip Zone: Support -> Resistance [Breakdown & Retest])
+
+        Returns:
+            Tuple of (is_touching, description, is_flip_zone)
         """
         zones = self.find_strong_h1_zones(df_h1)
         if not zones['supports'] and not zones['resistances']:
-            return False, ""
+            return False, "", False
 
         last = df_h1.iloc[-1]
         close = float(last['close'])
@@ -331,11 +385,13 @@ class StrategyEngine:
         if trend == TrendDirection.BULLISH:
             candidates = zones['supports']
             zone_label = "support"
+            flip_name = "Resistance -> Support"
         elif trend == TrendDirection.BEARISH:
             candidates = zones['resistances']
             zone_label = "resistance"
+            flip_name = "Support -> Resistance"
         else:
-            return False, ""
+            return False, "", False
 
         touched = []
         for zone in candidates:
@@ -348,30 +404,46 @@ class StrategyEngine:
                 touched.append((distance_pct, zone))
 
         if not touched:
-            return False, ""
+            return False, "", False
 
-        # Best zone = nearest to current close; tie-breaker: more touches
-        touched.sort(key=lambda item: (item[0], -item[1]['touches']))
+        # Ưu tiên sắp xếp:
+        # 1. Flip Zone lên đầu tiên (not is_flip: False (0) trước True (1))
+        # 2. Gần tâm zone nhất (distance_pct nhỏ nhất)
+        # 3. Nhiều lần chạm nhất (-touches)
+        touched.sort(key=lambda item: (not item[1].get('is_flip', False), item[0], -item[1]['touches']))
         distance_pct, best = touched[0]
-        return (
-            True,
-            (
+        is_flip = best.get('is_flip', False)
+
+        # Nếu cấu hình bắt buộc chỉ lấy Flip Zone mà zone này không phải Flip Zone
+        if config.H1_REQUIRE_FLIP_ZONE and not is_flip:
+            return False, "", False
+
+        if is_flip:
+            desc = (
+                f"H1 FLIP ZONE ({flip_name} [Breakout & Retest]) "
+                f"{best['zone_low']:.4f}-{best['zone_high']:.4f} "
+                f"({best['touches']} touches [H:{best['high_touches']}/L:{best['low_touches']}], {distance_pct:.2f}% from center)"
+            )
+        else:
+            desc = (
                 f"H1 strong {zone_label} zone "
                 f"{best['zone_low']:.4f}-{best['zone_high']:.4f} "
                 f"({best['touches']} touches, {distance_pct:.2f}% from center)"
             )
-        )
+
+        return True, desc, is_flip
     
     def is_in_value_zone(
         self, 
         df_h1: pd.DataFrame, 
         df_h4: pd.DataFrame,
         trend: TrendDirection
-    ) -> Tuple[bool, str, Optional[float]]:
+    ) -> Tuple[bool, str, Optional[float], bool]:
         """
         Step 2: Check if H1 price is in value zone.
         - Pullback to Fibonacci 0.5-0.618 from H4 swing
         - OR touching EMA 34/89 on H1
+        - AND touching strong S/R or Flip Zone on H1
         
         Args:
             df_h1: H1 timeframe DataFrame with indicators
@@ -379,13 +451,13 @@ class StrategyEngine:
             trend: Current trend direction from H4
             
         Returns:
-            Tuple of (is_in_zone, zone_description, fib_level)
+            Tuple of (is_in_zone, zone_description, fib_level, is_flip_zone)
         """
         if df_h1 is None or df_h1.empty:
-            return False, "", None
+            return False, "", None, False
         
         if 'ema34' not in df_h1.columns or 'ema89' not in df_h1.columns:
-            return False, "", None
+            return False, "", None, False
         
         last_candle = df_h1.iloc[-1]
         close = last_candle['close']
@@ -396,13 +468,13 @@ class StrategyEngine:
         
         # Skip if EMAs not ready
         if pd.isna(ema34) or pd.isna(ema89):
-            return False, "", None
+            return False, "", None, False
         
         # Calculate Fibonacci levels from H4
         fib_levels = self.calculate_fibonacci_levels(df_h4, trend)
         
         if not fib_levels:
-            return False, "", None
+            return False, "", None, False
         
         fib_50 = fib_levels['fib_0.5']
         fib_618 = fib_levels['fib_0.618']
@@ -446,14 +518,14 @@ class StrategyEngine:
                 base_desc = "EMA89 rejection"
 
         if not base_match:
-            return False, "", None
+            return False, "", None, False
 
-        # Additional required filter: H1 must also touch strong S/R zone (1.0-1.5%).
-        sr_match, sr_desc = self.is_touching_strong_h1_zone(df_h1, trend)
+        # Additional required filter: H1 must also touch strong S/R zone or Flip Zone
+        sr_match, sr_desc, is_flip = self.is_touching_strong_h1_zone(df_h1, trend)
         if not sr_match:
-            return False, "", None
+            return False, "", None, False
 
-        return True, f"{base_desc} + {sr_desc}", fib_level
+        return True, f"{base_desc} + {sr_desc}", fib_level, is_flip
     
     def detect_pinbar(self, df: pd.DataFrame, trend: TrendDirection) -> Optional[Dict]:
         """
@@ -689,7 +761,8 @@ class StrategyEngine:
         symbol: str,
         data_h4: pd.DataFrame,
         data_h1: pd.DataFrame,
-        data_m15: pd.DataFrame
+        data_m15: pd.DataFrame,
+        rvol: Optional[float] = None
     ) -> Optional[Signal]:
         """
         Analyze a symbol across all timeframes using the enhanced 3-step filter.
@@ -699,6 +772,7 @@ class StrategyEngine:
             data_h4: H4 candle data
             data_h1: H1 candle data
             data_m15: M15 candle data
+            rvol: Relative volume 24h vs 7d average
             
         Returns:
             Signal object if all conditions met, None otherwise
@@ -713,8 +787,8 @@ class StrategyEngine:
         if not trend or trend == TrendDirection.NEUTRAL:
             return None
         
-        # Step 2: Check H1 value zone with Fibonacci
-        in_zone, zone_desc, fib_level = self.is_in_value_zone(df_h1, df_h4, trend)
+        # Step 2: Check H1 value zone with Fibonacci & Flip Zone
+        in_zone, zone_desc, fib_level, is_flip = self.is_in_value_zone(df_h1, df_h4, trend)
         if not in_zone:
             return None
         
@@ -723,32 +797,37 @@ class StrategyEngine:
         if not entry_signal:
             return None
         
-        # Áp dụng stop loss min/max (config) — SL từ nến có thể quá ngắn
         entry = entry_signal['entry']
-        sl_raw = entry_signal['stop_loss']
-        min_pct = config.STOP_LOSS_MIN_PERCENT / 100.0
-        max_pct = config.STOP_LOSS_MAX_PERCENT / 100.0
         
+        # Cải tiến 2: Sử dụng ATR(14) để đặt SL/TP động
+        # Lấy ATR từ M15 (mặc định) hoặc H1
+        atr_df = df_m15 if config.ATR_TIMEFRAME == '15m' else df_h1
+        atr_series = atr_df.get('atr')
+        atr_val = (
+            float(atr_series.iloc[-1])
+            if atr_series is not None and pd.notna(atr_series.iloc[-1]) and atr_series.iloc[-1] > 0
+            else None
+        )
+
+        atr_mult = self.atr_multiplier
+        if atr_val is not None:
+            risk_distance = atr_mult * atr_val
+        else:
+            # Fallback nếu chưa tính được ATR: dùng nến M15
+            sl_raw = entry_signal['stop_loss']
+            risk_distance = abs(entry - sl_raw)
+
+        # Safety clamp nhẹ để tránh lỗi dữ liệu bất thường
+        min_dist = entry * (config.STOP_LOSS_MIN_PERCENT / 100.0)
+        max_dist = entry * (config.STOP_LOSS_MAX_PERCENT / 100.0)
+        risk_distance = max(min_dist, min(max_dist, risk_distance))
+
         if trend == TrendDirection.BULLISH:
-            risk_distance = entry - sl_raw
-            min_dist = entry * min_pct
-            max_dist = entry * max_pct
-            risk_distance = max(min_dist, min(max_dist, risk_distance))
             stop_loss = entry - risk_distance
+            take_profit = entry + (risk_distance * self.reward_ratio)
         else:
-            risk_distance = sl_raw - entry
-            min_dist = entry * min_pct
-            max_dist = entry * max_pct
-            risk_distance = max(min_dist, min(max_dist, risk_distance))
             stop_loss = entry + risk_distance
-        
-        risk = risk_distance
-        reward_ratio = 2.0  # 1:2 risk-reward ratio
-        
-        if trend == TrendDirection.BULLISH:
-            take_profit = entry + (risk * reward_ratio)
-        else:
-            take_profit = entry - (risk * reward_ratio)
+            take_profit = entry - (risk_distance * self.reward_ratio)
         
         # Build reason string
         reason_parts = [
@@ -761,6 +840,12 @@ class StrategyEngine:
             reason_parts.append("RSI Divergence")
         
         reason_parts.append(f"Volume {entry_signal['volume_ratio']:.2f}x")
+
+        if rvol is not None:
+            reason_parts.append(f"RVOL {rvol:.2f}x")
+
+        if atr_val is not None:
+            reason_parts.append(f"ATR({self.atr_period})={atr_val:.4f} ({atr_mult}x)")
         
         signal = Signal(
             symbol=symbol,
@@ -777,7 +862,11 @@ class StrategyEngine:
             current_price=df_m15['close'].iloc[-1],
             rsi=df_m15['rsi'].iloc[-1],
             volume_ratio=entry_signal['volume_ratio'],
-            fib_level=fib_level
+            fib_level=fib_level,
+            atr=atr_val,
+            atr_multiplier=atr_mult,
+            rvol=rvol,
+            is_flip_zone=is_flip
         )
         
         return signal
