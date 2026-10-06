@@ -194,10 +194,11 @@ class MultiTimeframeScanner:
                     print(f"  Thời gian: {duration:.1f}s")
                     print(f"  Tiết kiệm: {len(self.all_symbols) - len(self.candidate_symbols)} symbols cho H1")
                 
-                # Wait 1 hour before next H4 scan
-                print(f"⏸  H4: Chờ {config.SCAN_INTERVAL_H4/60:.0f} phút...")
+                # Compensate for scan duration to avoid interval drift
+                sleep_time = max(0.0, config.SCAN_INTERVAL_H4 - duration)
+                print(f"⏸  H4: Chờ {sleep_time/60:.1f} phút...")
                 gc.collect()
-                await asyncio.sleep(config.SCAN_INTERVAL_H4)
+                await asyncio.sleep(sleep_time)
                 
             except Exception as e:
                 print(f"❌ Lỗi H4 scan: {e}")
@@ -250,15 +251,15 @@ class MultiTimeframeScanner:
 
                             df_h1 = self.strategy.calculate_indicators(h1_data_batch[symbol])
 
-                            # pyrefly: ignore [bad-unpacking]
-                            in_zone, zone_desc, fib_level = self.strategy.is_in_value_zone(
+                            in_zone, zone_desc, fib_level, is_flip = self.strategy.is_in_value_zone(
                                 df_h1, df_h4, trend
                             )
 
                             if in_zone:
                                 new_watchlist[symbol] = trend
                                 self.disk_cache.save_df("h1", symbol, h1_data_batch[symbol])
-                                print(f"  🎯 {symbol}: {zone_desc}")
+                                flip_tag = " [FLIP ZONE]" if is_flip else ""
+                                print(f"  🎯 {symbol}: {zone_desc}{flip_tag}")
 
                         # Release batch dataframe references ASAP
                         del h1_data_batch
@@ -274,10 +275,11 @@ class MultiTimeframeScanner:
                     print(f"  Thời gian: {duration:.1f}s")
                     print(f"  Tiết kiệm: {len(candidates_list) - len(self.hot_watchlist)} symbols cho M15")
                 
-                # Wait 15 minutes before next H1 scan
-                print(f"⏸  H1: Chờ {config.SCAN_INTERVAL_H1/60:.0f} phút...")
+                # Compensate for scan duration to avoid interval drift
+                sleep_time = max(0.0, config.SCAN_INTERVAL_H1 - duration)
+                print(f"⏸  H1: Chờ {sleep_time/60:.1f} phút...")
                 gc.collect()
-                await asyncio.sleep(config.SCAN_INTERVAL_H1)
+                await asyncio.sleep(sleep_time)
                 
             except Exception as e:
                 print(f"❌ Lỗi H1 scan: {e}")
@@ -355,18 +357,35 @@ class MultiTimeframeScanner:
                         self.stats['total_signals'] += 1
                         await asyncio.sleep(1)  # Avoid Telegram rate limit
                 
-                # Wait 1-3 minutes before next M15 scan
-                print(f"⏸  M15: Chờ {config.SCAN_INTERVAL_M15/60:.1f} phút...")
+                # Compensate for scan and signal sending duration to avoid drift
+                elapsed = time.time() - start_time
+                sleep_time = max(0.0, config.SCAN_INTERVAL_M15 - elapsed)
+                print(f"⏸  M15: Chờ {sleep_time/60:.1f} phút...")
                 gc.collect()
-                await asyncio.sleep(config.SCAN_INTERVAL_M15)
+                await asyncio.sleep(sleep_time)
                 
             except Exception as e:
                 print(f"❌ Lỗi M15 scan: {e}")
                 await asyncio.sleep(60)
     
     async def statistics_reporter(self):
-        """Report statistics every hour."""
-        await asyncio.sleep(3600)  # Wait 1 hour before first report
+        """Report statistics every hour aligned to the top of the hour."""
+        def _get_sleep_to_next_hour(offset_seconds: float = 1.0) -> float:
+            # Calculate sleep duration to the next top of the hour (e.g. XX:00:01)
+            now = time.time()
+            next_hour = (int(now) // 3600 + 1) * 3600
+            delay = (next_hour + offset_seconds) - now
+            if delay <= 0.5:
+                delay += 3600
+            return delay
+
+        # Wait until the next top of the hour before sending the first report
+        initial_wait = _get_sleep_to_next_hour()
+        if initial_wait < 180:  # If less than 3 minutes to next hour, wait for the following hour
+            initial_wait += 3600
+
+        print(f"⏰ Stats reporter: Khởi chạy. Báo cáo đầu tiên lúc {datetime.fromtimestamp(time.time() + initial_wait).strftime('%H:%M:%S')} (sau {initial_wait/60:.1f} phút)")
+        await asyncio.sleep(initial_wait)
         
         while True:
             try:
@@ -392,11 +411,13 @@ class MultiTimeframeScanner:
                     f"Tín hiệu: {self.stats['total_signals']}"
                 )
                 
-                await asyncio.sleep(3600)  # Report every hour
-                
             except Exception as e:
                 print(f"❌ Lỗi stats reporter: {e}")
-                await asyncio.sleep(3600)
+            
+            # Align next report to the exact top of the next hour
+            sleep_time = _get_sleep_to_next_hour()
+            print(f"⏸  Stats reporter: Báo cáo tiếp theo lúc {datetime.fromtimestamp(time.time() + sleep_time).strftime('%H:%M:%S')} (sau {sleep_time/60:.1f} phút)...")
+            await asyncio.sleep(sleep_time)
     
     async def run(self):
         """
