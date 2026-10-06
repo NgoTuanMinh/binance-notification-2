@@ -46,9 +46,14 @@ TIMEFRAMES = {
 }
 
 # Scanning Intervals (in seconds)
-SCAN_INTERVAL_H4 = 3600      # 1 hour for H4 trend filter
-SCAN_INTERVAL_H1 = 900       # 15 minutes for H1 value zone
+# H4 and H1 loops are anchored to the exchange candle clock (UTC epoch multiples of the interval),
+# and each scan starts shortly BEFORE the candle closes. M15 loop runs continuously (not anchored).
+SCAN_INTERVAL_H4 = 3600      # 1 hour for H4 trend filter (set 14400 to scan only at real H4 closes)
+SCAN_INTERVAL_H1 = 3600      # 1 hour for H1 value zone (scan right before each H1 candle closes)
 SCAN_INTERVAL_M15 = 120      # 2 minutes for M15 signals (1-3 minutes range)
+
+# Seconds before the candle close at which the H1 scan starts (H4 scan finishes right before it)
+CANDLE_CLOSE_LEAD_SECONDS = int(os.getenv('CANDLE_CLOSE_LEAD_SECONDS', '25'))
 
 # Technical Indicators Parameters
 EMA_TREND = 200      # EMA for trend filter on H4

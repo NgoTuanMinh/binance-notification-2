@@ -1,8 +1,8 @@
 """
 Main Scanner - Orchestrates multi-timeframe market scanning with separate loops.
 Implements 3 independent scanning loops:
-- H4 Loop: Scans every 1 hour for trend filter
-- H1 Loop: Scans every 15 minutes for value zone (on H4 passed symbols)
+- H4 Loop: Scans hourly (anchored to the candle clock, finishes just before the H1 scan)
+- H1 Loop: Scans hourly, ~25s before the H1 candle closes (on H4 passed symbols)
 - M15 Loop: Scans every 1-3 minutes for entry signals (on hot watchlist)
 """
 import asyncio
@@ -57,9 +57,48 @@ class DiskDataCache:
             except Exception:
                 pass
 
+    def prune_timeframe(self, timeframe: str, keep_symbols: Set[str]) -> None:
+        """Delete cached files of symbols that are no longer needed (keeps the others readable)."""
+        tf_dir = self.base_dir / timeframe
+        if not tf_dir.exists():
+            return
+        keep_files = {f"{self._safe_symbol(symbol)}.pkl" for symbol in keep_symbols}
+        for path in tf_dir.glob("*.pkl"):
+            if path.name in keep_files:
+                continue
+            try:
+                path.unlink()
+            except Exception:
+                pass
+
     def clear_all(self) -> None:
         self.clear_timeframe("h4")
         self.clear_timeframe("h1")
+
+
+# Extra seconds the H4 scan should finish before the H1 scan starts
+H4_SAFETY_MARGIN_SECONDS = 5
+
+
+def seconds_until_next_close_scan(
+    interval_seconds: float,
+    lead_seconds: float,
+    now: Optional[float] = None,
+    min_gap_seconds: float = 1.0
+) -> float:
+    """
+    Seconds to sleep until `lead_seconds` before the next candle close.
+
+    Candle closes are multiples of `interval_seconds` since the UTC epoch (same clock as Binance),
+    so the result never drifts regardless of how long previous scans took.
+    """
+    current = time.time() if now is None else now
+    next_close = (int(current // interval_seconds) + 1) * interval_seconds
+    target = next_close - lead_seconds
+    # Target already passed (or too close): use the following candle close
+    if target - current <= min_gap_seconds:
+        target += interval_seconds
+    return target - current
 
 
 class MultiTimeframeScanner:
@@ -93,6 +132,37 @@ class MultiTimeframeScanner:
             'total_signals': 0
         }
 
+        # H4 -> H1 synchronization (H1 must run on fresh H4 results)
+        self.h4_running = False
+        self.h4_generation = 0  # Number of completed H4 scans
+        self.last_h4_duration = 60.0  # Seconds, updated after each H4 scan (used to schedule the next one)
+
+    @staticmethod
+    def _format_interval(seconds: float) -> str:
+        """Human readable interval for log/Telegram messages."""
+        if seconds >= 3600:
+            return f"{seconds / 3600:g} giờ"
+        return f"{seconds / 60:g} phút"
+
+    def _h4_scan_lead_seconds(self) -> float:
+        """
+        How long before the candle close the H4 scan must start so that it finishes
+        right before the H1 scan starts (H4 scans hundreds of symbols and takes ~1 minute).
+        """
+        lead = config.CANDLE_CLOSE_LEAD_SECONDS + self.last_h4_duration + H4_SAFETY_MARGIN_SECONDS
+        return min(lead, config.SCAN_INTERVAL_H4 / 2)
+
+    async def _wait_for_first_h4(self):
+        """Block until the first H4 scan has produced a result."""
+        while self.h4_generation == 0:
+            await asyncio.sleep(1)
+
+    async def _wait_for_h4_idle(self, timeout: float = 120.0):
+        """If an H4 scan is still running, wait for it (bounded) so H1 uses fresh candidates."""
+        deadline = time.monotonic() + timeout
+        while self.h4_running and time.monotonic() < deadline:
+            await asyncio.sleep(1)
+
     @staticmethod
     def _chunk_symbols(symbols: List[str], batch_size: int):
         """Yield symbols in small batches to reduce peak memory usage."""
@@ -122,9 +192,9 @@ class MultiTimeframeScanner:
             telegram_msg += f"Tổng số cặp: {len(self.all_symbols)}"
             if config.MAX_SYMBOLS_TO_SCAN:
                 telegram_msg += f" (top {config.MAX_SYMBOLS_TO_SCAN} by {config.SYMBOL_SORT_METHOD})"
-            telegram_msg += f"\n⏰ H4 scan: 1 giờ\n"
-            telegram_msg += f"⏰ H1 scan: 15 phút\n"
-            telegram_msg += f"⏰ M15 scan: 2 phút\n\n"
+            telegram_msg += f"\n⏰ H4 scan: mỗi {self._format_interval(config.SCAN_INTERVAL_H4)} (hoàn tất trước khi đóng nến)\n"
+            telegram_msg += f"⏰ H1 scan: mỗi {self._format_interval(config.SCAN_INTERVAL_H1)} (trước khi đóng nến {config.CANDLE_CLOSE_LEAD_SECONDS}s)\n"
+            telegram_msg += f"⏰ M15 scan: liên tục mỗi {self._format_interval(config.SCAN_INTERVAL_M15)}\n\n"
             telegram_msg += f"🔍 Đang bắt đầu quét..."
             
             await self.telegram.send_message(telegram_msg)
@@ -133,7 +203,9 @@ class MultiTimeframeScanner:
     
     async def scan_h4_trend_filter(self):
         """
-        H4 LOOP: Scan every 1 hour to identify trending symbols.
+        H4 LOOP: Scan every hour to identify trending symbols.
+        The first scan runs at startup; the next ones are anchored to the candle clock and start
+        early enough to finish right before the H1 scan (which runs ~25s before the candle closes).
         Output: Candidate_Symbols with trend direction.
         """
         while True:
@@ -142,9 +214,9 @@ class MultiTimeframeScanner:
                 print(f"📊 H4 TREND FILTER - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
                 print("="*70)
                 
+                self.h4_running = True
                 self.stats['h4_scans'] += 1
                 start_time = time.time()
-                self.disk_cache.clear_timeframe("h4")
                 
                 async with MarketDataFetcher() as fetcher:
                     # Filter symbols with clear trend and structure
@@ -183,41 +255,63 @@ class MultiTimeframeScanner:
                                     print(f"  ⚠️ Bỏ qua {sym}: RVOL {rvol_val:.2f}x < {config.RVOL_THRESHOLD}x (thiếu dòng tiền)")
                             new_candidates = filtered_candidates
 
-                    # Update candidate list
+                    # Update candidate list, then drop cached H4 data of symbols that no longer qualify
+                    # (pruned after the scan so M15/H1 loops never see an empty cache)
                     self.candidate_symbols = new_candidates
+                    self.disk_cache.prune_timeframe("h4", set(self.candidate_symbols.keys()))
                     self.h4_data_cache = {}
                     
                     duration = time.time() - start_time
+                    self.last_h4_duration = duration
                     
                     print(f"\n📈 Kết quả H4:")
                     print(f"  Candidates: {len(self.candidate_symbols)}/{len(self.all_symbols)}")
                     print(f"  Thời gian: {duration:.1f}s")
                     print(f"  Tiết kiệm: {len(self.all_symbols) - len(self.candidate_symbols)} symbols cho H1")
                 
-                # Compensate for scan duration to avoid interval drift
-                sleep_time = max(0.0, config.SCAN_INTERVAL_H4 - duration)
-                print(f"⏸  H4: Chờ {sleep_time/60:.1f} phút...")
+                self.h4_generation += 1
+                self.h4_running = False
+                
+                # Anchor the next scan to the candle clock (no drift): finish right before H1 starts
+                lead = self._h4_scan_lead_seconds()
+                sleep_time = seconds_until_next_close_scan(config.SCAN_INTERVAL_H4, lead)
+                next_run = datetime.fromtimestamp(time.time() + sleep_time).strftime('%H:%M:%S')
+                print(f"⏸  H4: Quét tiếp lúc {next_run} (sau {sleep_time/60:.1f} phút, sớm {lead:.0f}s trước khi đóng nến)")
                 gc.collect()
                 await asyncio.sleep(sleep_time)
                 
             except Exception as e:
+                self.h4_running = False
                 print(f"❌ Lỗi H4 scan: {e}")
                 await asyncio.sleep(300)  # Wait 5 minutes on error
     
     async def scan_h1_value_zone(self):
         """
-        H1 LOOP: Scan every 15 minutes to find value zones.
+        H1 LOOP: Scan every hour, ~25s before the H1 candle closes, to find value zones.
+        The first scan runs right after the first H4 scan finishes (at startup).
         Only scans Candidate_Symbols from H4.
         Output: Hot_Watchlist ready for M15 signals.
         """
-        # Wait a bit for H4 to complete first scan
-        await asyncio.sleep(60)
+        # Wait for H4 to complete its first scan
+        await self._wait_for_first_h4()
+        first_scan = True
         
         while True:
             try:
+                if not first_scan:
+                    sleep_time = seconds_until_next_close_scan(
+                        config.SCAN_INTERVAL_H1, config.CANDLE_CLOSE_LEAD_SECONDS
+                    )
+                    next_run = datetime.fromtimestamp(time.time() + sleep_time).strftime('%H:%M:%S')
+                    print(f"⏸  H1: Quét tiếp lúc {next_run} (sau {sleep_time/60:.1f} phút, sớm {config.CANDLE_CLOSE_LEAD_SECONDS}s trước khi đóng nến)")
+                    gc.collect()
+                    await asyncio.sleep(sleep_time)
+                    # H4 starts earlier than H1; make sure it is done so H1 uses fresh candidates
+                    await self._wait_for_h4_idle()
+                first_scan = False
+                
                 if not self.candidate_symbols:
-                    print("\n⏸  H1: Chờ H4 tạo danh sách candidates...")
-                    await asyncio.sleep(config.SCAN_INTERVAL_H1)
+                    print("\n⏸  H1: H4 chưa có candidates, bỏ qua lượt quét này")
                     continue
                 
                 print("\n" + "="*70)
@@ -226,7 +320,6 @@ class MultiTimeframeScanner:
                 
                 self.stats['h1_scans'] += 1
                 start_time = time.time()
-                self.disk_cache.clear_timeframe("h1")
                 
                 candidates_list = list(self.candidate_symbols.keys())
                 
@@ -264,8 +357,10 @@ class MultiTimeframeScanner:
                         # Release batch dataframe references ASAP
                         del h1_data_batch
                     
-                    # Update hot watchlist
+                    # Update hot watchlist, then drop cached H1 data of symbols that left the zone
+                    # (pruned after the scan so the M15 loop never sees an empty cache)
                     self.hot_watchlist = new_watchlist
+                    self.disk_cache.prune_timeframe("h1", set(self.hot_watchlist.keys()))
                     self.h1_data_cache = {}
                     
                     duration = time.time() - start_time
@@ -274,12 +369,6 @@ class MultiTimeframeScanner:
                     print(f"  Hot Watchlist: {len(self.hot_watchlist)}/{len(candidates_list)}")
                     print(f"  Thời gian: {duration:.1f}s")
                     print(f"  Tiết kiệm: {len(candidates_list) - len(self.hot_watchlist)} symbols cho M15")
-                
-                # Compensate for scan duration to avoid interval drift
-                sleep_time = max(0.0, config.SCAN_INTERVAL_H1 - duration)
-                print(f"⏸  H1: Chờ {sleep_time/60:.1f} phút...")
-                gc.collect()
-                await asyncio.sleep(sleep_time)
                 
             except Exception as e:
                 print(f"❌ Lỗi H1 scan: {e}")
@@ -441,9 +530,9 @@ class MultiTimeframeScanner:
         
         print("\n🚀 KHỞI ĐỘNG 3 LUỒNG QUÉT SONG SONG")
         print("="*70)
-        print("  🔵 H4 Loop: Mỗi 1 giờ - Trend Filter")
-        print("  🟢 H1 Loop: Mỗi 15 phút - Value Zone")
-        print("  🟡 M15 Loop: Mỗi 2 phút - Entry Signals")
+        print(f"  🔵 H4 Loop: Mỗi {self._format_interval(config.SCAN_INTERVAL_H4)} - Trend Filter (hoàn tất trước khi H1 quét)")
+        print(f"  🟢 H1 Loop: Mỗi {self._format_interval(config.SCAN_INTERVAL_H1)} - Value Zone (trước khi đóng nến {config.CANDLE_CLOSE_LEAD_SECONDS}s)")
+        print(f"  🟡 M15 Loop: Liên tục mỗi {self._format_interval(config.SCAN_INTERVAL_M15)} - Entry Signals")
         print("  📊 Stats: Báo cáo mỗi giờ")
         print("="*70 + "\n")
         
